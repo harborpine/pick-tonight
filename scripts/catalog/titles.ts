@@ -65,12 +65,55 @@ function mergeAka(a: string[] | undefined, b: string[] | undefined, title: strin
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// Alternate names (aka)
+// ---------------------------------------------------------------------------
+
+export interface AltTitle {
+  country: string;
+  title: string;
+  type: string;
+}
+
+const ENGLISH_GROUPS = [['US'], ['GB', 'CA', 'AU', 'IE', 'NZ']];
+const JUNK = /\bseason\s*\d|\bseries\s*\d|\bworking\b|\btemp(orary)?\b|\bepisode\b|\bpromo\b|\bdvd\b|\bprovisional\b|\btbd\b/i;
+export const AKA_MAX = 5;
+
+export function isJunkName(name: string): boolean {
+  const t = name.trim();
+  return !t || t.length > 80 || JUNK.test(t);
+}
+
+/**
+ * Tidy alternate names: `existing` (original-language title and anything already known) first,
+ * then US names, then other English-speaking countries; case-insensitive de-dupe, no names equal to
+ * the title, no junk (working titles, "Season 1", over 80 characters), at most AKA_MAX.
+ */
+export function cleanAka(title: string, existing: string[] | undefined, alts: AltTitle[] | undefined): string[] {
+  const seen = new Set<string>([title.trim().toLowerCase()]);
+  const out: string[] = [];
+  const take = (name: string, trusted: boolean) => {
+    const n = name.trim().replace(/\s+/g, ' ');
+    const k = n.toLowerCase();
+    if (!n || seen.has(k) || n.length > 80) return;
+    if (!trusted && isJunkName(n)) return;
+    seen.add(k);
+    out.push(n);
+  };
+  for (const e of existing ?? []) take(e, true);
+  const usable = (alts ?? []).filter((a) => !/working/i.test(a.type));
+  for (const group of ENGLISH_GROUPS) for (const a of usable) if (group.includes(a.country)) take(a.title, false);
+  return out.slice(0, AKA_MAX);
+}
+
 export interface IndexInputs {
   items: CatalogItem[];
   tasteRefs: TasteRef[];
   /** Original titles for catalog items / tasteRefs where known (id -> original title). */
   originals?: Map<string, string>;
   listRows: { kind: TitleKind; row: ListRow }[];
+  /** Alternative titles by id (catalog items from their details, others from the alt-name cache). */
+  alternates?: Map<string, AltTitle[]>;
 }
 
 /**
@@ -113,6 +156,12 @@ export function buildTitleIndex(inp: IndexInputs): TitleIndexEntry[] {
   for (const i of inp.items) put(fromCore(i, i.poster, i.popularity));
   for (const r of inp.tasteRefs) put(fromCore(r, null, 0));
   for (const { kind, row } of inp.listRows) put(rowToEntry(kind, row));
+  for (const [id, e] of byId) {
+    const aka = cleanAka(e.title, e.aka, inp.alternates?.get(id));
+    const { aka: _old, ...rest } = e;
+    void _old;
+    byId.set(id, aka.length ? { ...rest, aka } : rest);
+  }
   return [...byId.values()].sort((a, b) => b.popularity - a.popularity || a.id.localeCompare(b.id));
 }
 

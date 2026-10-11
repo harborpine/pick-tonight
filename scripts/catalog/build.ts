@@ -15,7 +15,8 @@ import { diffArrivals, prevFromPool, type Pool, type SeedInfo } from './diff';
 import { allSeedTitles, chooseSearchResult, SEED_IDS, type SeedTitle } from './seeds';
 import { countByDefaultService, validateCatalog, LIMITS } from './validate';
 import { isoDate, median, pMap, sleep } from './util';
-import { buildTitleIndex, titleListJobs, toListRow, trimIndexToBytes, validateTitleIndex, type ListRow } from './titles';
+import { buildTitleIndex, titleListJobs, toListRow, trimIndexToBytes, validateTitleIndex, type AltTitle, type ListRow } from './titles';
+import { rawAlts } from './parse';
 import { findSpinoffs, KnownTitles, knownFromIndex } from './spinoff';
 
 // Derived from the repo owner so an account rename can't break the previous-build lookup.
@@ -280,8 +281,38 @@ async function fetchTitleRows(tmdb: TmdbClient): Promise<{ kind: TitleKind; row:
   return rows;
 }
 
-function buildIndexFor(items: CatalogItem[], tasteRefs: TasteRef[], originals: Map<string, string>, listRows: { kind: TitleKind; row: ListRow }[]) {
-  return buildTitleIndex({ items, tasteRefs, originals, listRows });
+function buildIndexFor(items: CatalogItem[], tasteRefs: TasteRef[], originals: Map<string, string>, listRows: { kind: TitleKind; row: ListRow }[], alternates?: Map<string, AltTitle[]>) {
+  return buildTitleIndex({ items, tasteRefs, originals, listRows, alternates });
+}
+
+/** Alternate names for the most popular non-catalog titles: one call each, cached 30 days per title. Failures are non-fatal. */
+async function fetchAltNames(tmdb: TmdbClient, ids: string[]): Promise<Map<string, AltTitle[]>> {
+  const file = path.join(CACHE_DIR, 'altnames', 'alts.json');
+  const store: Record<string, { at: number; alts: AltTitle[] }> = (await readCache(file, 3650)) ?? {};
+  const fresh = (id: string) => store[id] && Date.now() - store[id].at < 30 * 86_400_000;
+  const todo = ids.filter((id) => !fresh(id));
+  let failed = 0;
+  await pMap(
+    todo,
+    async (id) => {
+      const [kind, num] = id.split('-');
+      try {
+        const d = await tmdb.get<any>(`/${kind}/${num}/alternative_titles`);
+        store[id] = { at: Date.now(), alts: rawAlts(d) };
+      } catch {
+        failed++;
+      }
+    },
+    14,
+  );
+  // forget stale entries nobody asked for, so the cache cannot grow without bound
+  const want = new Set(ids);
+  for (const id of Object.keys(store)) if (!want.has(id) && !fresh(id)) delete store[id];
+  await writeCache(file, store);
+  log(`Alternate names: ${ids.length} wanted, ${todo.length} fetched (${failed} failed), ${ids.length - todo.length} from cache`);
+  const out = new Map<string, AltTitle[]>();
+  for (const id of ids) if (store[id]) out.set(id, store[id].alts);
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -434,7 +465,16 @@ SPINOFF LINKS (${spinLinks.length}):`);
 
   // Title index for the final catalog
   const protectedIds = new Set<string>([...chosen.map((i) => i.id), ...tasteRefs.map((r) => r.id)]);
-  const titleEntries = trimIndexToBytes(buildIndexFor(chosen, tasteRefs, originals, listRows), protectedIds, builtAt);
+  const alternates = new Map<string, AltTitle[]>();
+  for (const id of protectedIds) {
+    const p = parsedAll.get(id);
+    if (p?.altTitles.length) alternates.set(id, p.altTitles);
+  }
+  const bare = buildIndexFor(chosen, tasteRefs, originals, listRows).filter((e) => !protectedIds.has(e.id));
+  const wantAlt = [...bare.filter((e) => e.kind === 'tv').slice(0, 2000), ...bare.filter((e) => e.kind === 'movie').slice(0, 1000)].map((e) => e.id);
+  for (const [id, alts] of await fetchAltNames(tmdb, wantAlt)) alternates.set(id, alts);
+  const titleEntries = trimIndexToBytes(buildIndexFor(chosen, tasteRefs, originals, listRows, alternates), protectedIds, builtAt);
+  log(`titles.json aka: ${titleEntries.filter((t) => t.aka?.length).length} of ${titleEntries.length} entries have alternate names`);
   const titleIndex: TitleIndex = { schema: 1, builtAt, titles: titleEntries };
   const titlesJson = JSON.stringify(titleIndex);
   const titlesBytes = Buffer.byteLength(titlesJson);

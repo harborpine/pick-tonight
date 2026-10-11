@@ -4,8 +4,8 @@ import { ALL_PROVIDER_IDS } from '../../src/contracts/catalog';
 import { mapGenres, pickRuntime, tagTitle, countKw, type TagInput } from './tagging';
 import { truncate, round2 } from './util';
 
-export const DETAIL_APPEND_MOVIE = 'keywords,watch/providers,recommendations,release_dates';
-export const DETAIL_APPEND_TV = 'keywords,watch/providers,recommendations,content_ratings';
+export const DETAIL_APPEND_MOVIE = 'keywords,watch/providers,recommendations,release_dates,alternative_titles';
+export const DETAIL_APPEND_TV = 'keywords,watch/providers,recommendations,content_ratings,alternative_titles';
 
 export interface Parsed {
   tmdbId: number;
@@ -37,6 +37,8 @@ export interface Parsed {
   releaseDate?: string;
   /** TV: premiere date of each season (>0). */
   seasonPremieres: { season: number; airDate: string }[];
+  /** Alternative titles TMDB lists (country = ISO 3166-1, type is free text, often empty). */
+  altTitles: { country: string; title: string; type: string }[];
 }
 
 const ALL = new Set(ALL_PROVIDER_IDS);
@@ -61,6 +63,14 @@ function certification(kind: TitleKind, d: any): string | undefined {
     if (hit) return hit.certification;
   }
   return dates.find((x) => x.certification)?.certification || undefined;
+}
+
+/** Reads TMDB's alternative_titles block (movies use `titles`, TV uses `results`). */
+export function rawAlts(block: any): { country: string; title: string; type: string }[] {
+  const list: any[] = block?.titles ?? block?.results ?? [];
+  return list
+    .filter((x) => x && typeof x.title === 'string')
+    .map((x) => ({ country: String(x.iso_3166_1 ?? ''), title: x.title as string, type: String(x.type ?? '') }));
 }
 
 export function parseDetail(kind: TitleKind, d: any): Parsed | null {
@@ -106,6 +116,7 @@ export function parseDetail(kind: TitleKind, d: any): Parsed | null {
     runtimeGuess: kind === 'tv' && (!(d.episode_run_time ?? []).some((x: number) => x > 0) || (genres.includes('comedy') && !genres.includes('drama') && (d.episode_run_time ?? []).some((x: number) => x >= 26 && x <= 32))),
     releaseDate: date,
     seasonPremieres,
+    altTitles: rawAlts(d?.alternative_titles),
   };
 }
 

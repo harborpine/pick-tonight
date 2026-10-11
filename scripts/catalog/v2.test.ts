@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { CatalogItem, TitleIndexEntry } from '../../src/contracts/catalog';
 import { FIXTURE_CATALOG } from '../../src/contracts/fixtures/catalog';
-import { parseDetail, pickLatestSeason, toCatalogItem } from './parse';
-import { buildTitleIndex, rowToEntry, titleListJobs, toListRow, trimIndexToBytes, validateTitleIndex } from './titles';
+import { parseDetail, pickLatestSeason, rawAlts, toCatalogItem } from './parse';
+import { buildTitleIndex, cleanAka, rowToEntry, titleListJobs, toListRow, trimIndexToBytes, validateTitleIndex } from './titles';
 import { findSpinoffs, KnownTitles, normTitle, shareFranchiseWords, type KnownTv, type SpinoffChild } from './spinoff';
 
 describe('latestSeason', () => {
@@ -214,5 +214,42 @@ describe('spinoff links', () => {
   });
   it('never links a title to itself', () => {
     expect(run([child('tv-8', 'Love Island', 2015)])['tv-8']).toBeUndefined();
+  });
+});
+
+describe('alternate names (aka)', () => {
+  const a = (country: string, title: string, type = '') => ({ country, title, type });
+  it('puts the original first, then US names, then other English names', () => {
+    expect(cleanAka('The Great British Bake Off', undefined, [a('GB', 'Bake Off'), a('US', 'The Great British Baking Show'), a('DE', 'Das große Backen')])).toEqual(['The Great British Baking Show', 'Bake Off']);
+    expect(cleanAka('Squid Game', ['오징어 게임'], [a('US', 'Squid Game: Season 1'), a('US', 'Round Six')])).toEqual(['오징어 게임', 'Round Six']);
+  });
+  it('de-duplicates case-insensitively and drops names equal to the title', () => {
+    expect(cleanAka('The Office', ['the office'], [a('US', 'THE OFFICE'), a('US', 'The Office (U.S.)'), a('GB', 'The Office (U.S.)')])).toEqual(['The Office (U.S.)']);
+  });
+  it('skips junk: seasons, working titles, long names, non-English countries', () => {
+    const long = 'x'.repeat(81);
+    expect(cleanAka('T', undefined, [a('US', 'T Season 1'), a('US', 'Untitled Working Title'), a('US', 'Fine Name', 'working title'), a('US', long), a('FR', 'Titre'), a('US', 'Good One')])).toEqual(['Good One']);
+  });
+  it('caps at five', () => {
+    const alts = Array.from({ length: 10 }, (_, i) => a('US', `Name ${i}`));
+    expect(cleanAka('T', ['Orig'], alts)).toHaveLength(5);
+  });
+  it('rawAlts reads both the movie and the tv shape', () => {
+    expect(rawAlts({ titles: [{ iso_3166_1: 'US', title: 'A', type: '' }] })).toEqual([{ country: 'US', title: 'A', type: '' }]);
+    expect(rawAlts({ results: [{ iso_3166_1: 'GB', title: 'B' }] })).toEqual([{ country: 'GB', title: 'B', type: '' }]);
+    expect(rawAlts(undefined)).toEqual([]);
+    expect(parseDetail('tv', { id: 1, name: 'Show', first_air_date: '2020-01-01', alternative_titles: { results: [{ iso_3166_1: 'US', title: 'Alt' }] } })!.altTitles).toHaveLength(1);
+  });
+  it('is merged into the index for catalog items and other entries', () => {
+    const item = FIXTURE_CATALOG.items.find((i) => i.kind === 'tv')!;
+    const alternates = new Map([[item.id, [a('US', 'US Name')]], ['tv-900', [a('US', 'Baking Show')]]]);
+    const idx = buildTitleIndex({
+      items: [item],
+      tasteRefs: [],
+      alternates,
+      listRows: [{ kind: 'tv', row: { id: 900, title: 'Bake Off', original: 'Bake Off', date: '2010-01-01', genreIds: [], poster: null, popularity: 5 } }],
+    });
+    expect(idx.find((e) => e.id === item.id)!.aka).toEqual(['US Name']);
+    expect(idx.find((e) => e.id === 'tv-900')!.aka).toEqual(['Baking Show']);
   });
 });

@@ -43,7 +43,9 @@ jobs:
         run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/deploy.yml/enable"
 
       # Season / episode lookups change slowly, so they are cached between runs.
-      - uses: actions/cache@v4
+      # Restored here and saved right after the catalog step, so a later failure
+      # (tests, site build) does not throw the cache away.
+      - uses: actions/cache/restore@v4
         with:
           path: .cache/catalog
           key: catalog-episodes-${{ github.run_id }}
@@ -53,6 +55,12 @@ jobs:
         env:
           TMDB_TOKEN: ${{ secrets.TMDB_TOKEN }}
         run: npm run catalog
+
+      - name: Save the catalog cache
+        uses: actions/cache/save@v4
+        with:
+          path: .cache/catalog
+          key: catalog-episodes-${{ github.run_id }}
 
       # A plain download for the team: the real catalog files.
       - uses: actions/upload-artifact@v4
