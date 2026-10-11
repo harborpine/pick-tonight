@@ -4,6 +4,7 @@
  * How a title is scored for ONE person (all parts 0..1 unless noted):
  *
  *   base  = taste        resemblance to their favourites            (W_TASTE)
+ *         + shape        the general kind of thing they love, -1..1 (W_SHAPE)
  *         + learned      what their swipes have taught, -1..1       (W_LEARN)
  *         + quality      rating, discounted when few people voted   (W_QUALITY)
  *         + familiarity  "you've heard of it" (votes, popularity)   (W_POP)
@@ -50,7 +51,7 @@ import {
   type WatchPick,
   type Who,
 } from '../contracts';
-import { getIndex, type CatalogIndex, type ItemInfo } from './catalogIndex';
+import { getIndex, sameTitleKey, type CatalogIndex, type ItemInfo } from './catalogIndex';
 import { GENRE_NOUNS } from './phrases';
 import {
   attentionOk,
@@ -67,6 +68,7 @@ import {
   OWN_FAVOURITE_TASTE,
   correctionDelta,
   nichePenalty,
+  traitFit,
   getFavModel,
   learnedScore,
   learnedView,
@@ -79,12 +81,13 @@ import { clamp, hash01, round4 } from './util';
 // ---- weights (tuned with src/engine/dev/review.ts) -------------------------
 const W_TASTE = 0.5;
 const W_LEARN = 0.3;
+const W_SHAPE = 0.14;
 const W_QUALITY = 0.18;
 const W_POP = 0.12;
 const W_LENGTH = 0.16;
 const W_FORMAT = 0.05;
-const W_MOOD = 0.3;
-const MOOD_FLOOR = 0.4;
+const W_MOOD = 0.4;
+const MOOD_FLOOR = 0.25;
 const W_CORRECTION = 0.16;
 const CORRECTION_CAP = 0.36;
 /** Together: weight on the less keen person's score. */
@@ -179,7 +182,7 @@ function moodFit(item: CatalogItem, mood: MoodId): { raw: number; near: number; 
 }
 
 /**
- * How well this pick uses the time available, 0.4..1.
+ * How well this pick uses the time available, 0..1.
  * A single sitting that fills the slot is ideal. Series get partial credit for
  * "watch a few": several sitcom episodes do fill an hour, but a 22-minute
  * sitcom is a fine-not-ideal answer to "2+ hrs", where films fit best.
@@ -194,11 +197,11 @@ function lengthFit(item: CatalogItem, minutes: number, req: SuggestRequest): num
     const severalShare = req.time === 120 ? 0.3 : item.dropIn ? 0.5 : 0.4;
     fit = (1 - severalShare) * single + severalShare * several;
     // With a whole evening, an hour-long drama you can settle into is a real answer.
-    if (req.time === 120 && minutes >= 40) fit = Math.max(fit, 0.8);
+    if (req.time === 120 && minutes >= 40) fit = Math.max(fit, 0.75);
   } else if (minutes > 165) {
     fit = 0.85; // very long films are a commitment even with 2+ hrs
   }
-  return 0.4 + 0.6 * fit;
+  return fit;
 }
 
 /**
@@ -244,11 +247,12 @@ function personCtx(person: PersonId, ctx: EngineContext): PersonCtx {
 }
 
 /** Taste + learning + corrections for one person; the request-independent half. */
-function tasteParts(info: ItemInfo, p: PersonCtx, index: CatalogIndex): { taste: number; learned: number; corr: number; isFav: boolean } {
+function tasteParts(info: ItemInfo, p: PersonCtx, index: CatalogIndex): { taste: number; shape: number; learned: number; corr: number; isFav: boolean } {
   const isFav = p.fav.favIds.has(info.item.id);
   const taste = isFav ? Math.max(OWN_FAVOURITE_TASTE, p.fav.score[info.idx]) : p.fav.score[info.idx];
   return {
     taste,
+    shape: isFav ? 0 : traitFit(info, p.fav),
     learned: learnedScore(info, p.view, index),
     corr: clamp(W_CORRECTION * correctionDelta(info, p.view), -CORRECTION_CAP, CORRECTION_CAP) + nichePenalty(info, p.fav, p.view),
     isFav,
@@ -407,7 +411,7 @@ export function buildDeck(req: SuggestRequest, ctx: EngineContext, opts: DeckOpt
     const moodMul = MOOD_FLOOR + (1 - MOOD_FLOOR) * mood.eff;
     const scores = people.map((p, k) => {
       const t = tasteParts(info, p, index);
-      const base = W_TASTE * t.taste + W_LEARN * t.learned + shared;
+      const base = W_TASTE * t.taste + W_SHAPE * t.shape + W_LEARN * t.learned + shared;
       return base * moodMul + W_MOOD * mood.eff + t.corr + noveltyAdjust(item, seenFlags[k], t.isFav, req);
     });
     let score = blend(scores);
@@ -431,9 +435,9 @@ export function buildDeck(req: SuggestRequest, ctx: EngineContext, opts: DeckOpt
     // Craving: matching titles first, always. The rest only fill what's left.
     const yes = cands.filter((c) => c.craved);
     const no = cands.filter((c) => !c.craved);
-    const first = diversify(dropPoorMood(yes, goodMoodCraved, req.mood).sort(byScore), limit, seenCap);
+    const first = diversify(oneEach(dropPoorMood(yes, goodMoodCraved, req.mood).sort(byScore)), limit, seenCap, index);
     const rest =
-      first.length < limit ? diversify(dropPoorMood(no, goodMood, req.mood).sort(byScore), limit - first.length, seenCap) : [];
+      first.length < limit ? diversify(oneEach(dropPoorMood(no, goodMood, req.mood).sort(byScore)), limit - first.length, seenCap, index) : [];
     // Keep reported scores honest about the tiers: fillers always score below matches.
     if (first.length && rest.length) {
       const floor = Math.min(...first.map((c) => c.score)) - 0.02;
@@ -442,7 +446,7 @@ export function buildDeck(req: SuggestRequest, ctx: EngineContext, opts: DeckOpt
     }
     ordered = first.concat(rest);
   } else {
-    ordered = diversify(dropPoorMood(cands, goodMood, req.mood).sort(byScore), limit, seenCap);
+    ordered = diversify(oneEach(dropPoorMood(cands, goodMood, req.mood).sort(byScore)), limit, seenCap, index);
   }
 
   // Report scores that never rise down the deck, so "higher is better" matches the order.
@@ -476,16 +480,28 @@ function dropPoorMood(cands: Candidate[], goodCount: number, mood: MoodId): Cand
   return cands;
 }
 
+/** The catalog sometimes lists one show twice; keep only the better-scoring entry (input is best-first). */
+function oneEach(sorted: Candidate[]): Candidate[] {
+  const seen = new Set<string>();
+  return sorted.filter((c) => {
+    const key = sameTitleKey(c.info.item);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 /**
  * Greedy re-ordering for variety. At each position take the best remaining
  * title after marking down those too similar to the last few chosen. The
  * mark-downs are small, so this only reshuffles titles that were close anyway —
  * it can never lift a poor title over a good one.
  */
-function diversify(sorted: Candidate[], limit: number, seenCap: number): Candidate[] {
+function diversify(sorted: Candidate[], limit: number, seenCap: number, index: CatalogIndex): Candidate[] {
   const pool = sorted.slice(0, Math.max(limit * 4, 120));
   const out: Candidate[] = [];
   let seenCount = 0;
+  let run = 0; // how many of the latest picks in a row are the same kind (film / series)
   const WINDOW = 5;
   while (out.length < limit && pool.length) {
     let bestK = 0;
@@ -498,10 +514,12 @@ function diversify(sorted: Candidate[], limit: number, seenCap: number): Candida
       let adj = c.score;
       let decay = 1;
       for (let j = out.length - 1; j >= 0 && j >= out.length - WINDOW; j--) {
-        adj -= decay * alike(c, out[j]);
+        adj -= decay * alike(c, out[j], index);
         decay *= 0.65;
       }
       if (c.seen && seenCap < 1 && seenCount + 1 > seenCap * (out.length + 1) + 0.5) adj -= 0.15;
+      // A long unbroken run of series (or of films) makes the other kind a little more welcome.
+      if (run >= 3 && c.info.item.kind === out[out.length - 1].info.item.kind) adj -= Math.min(0.08, 0.02 * (run - 2));
       if (adj > bestAdj) {
         bestAdj = adj;
         bestK = k;
@@ -509,20 +527,22 @@ function diversify(sorted: Candidate[], limit: number, seenCap: number): Candida
     }
     const [chosen] = pool.splice(bestK, 1);
     if (chosen.seen) seenCount++;
+    run = out.length && out[out.length - 1].info.item.kind === chosen.info.item.kind ? run + 1 : 1;
     out.push(chosen);
   }
   return out;
 }
 
 /** 0..~0.07: how much two titles feel like "the same thing again". */
-function alike(a: Candidate, b: Candidate): number {
+function alike(a: Candidate, b: Candidate, index: CatalogIndex): number {
   const x = a.info.item;
   const y = b.info.item;
   let p = 0;
+  // Genres weighted by rarity: two animated comedies are far more alike than two "comedies".
   let sharedG = 0;
-  for (const g of x.genres) if (y.genres.includes(g)) sharedG++;
-  const unionG = x.genres.length + y.genres.length - sharedG;
-  if (unionG > 0) p += 0.03 * (sharedG / unionG);
+  for (const g of x.genres) if (y.genres.includes(g)) sharedG += index.genreWeight(g);
+  const unionG = a.info.genreWeightSum + b.info.genreWeightSum - sharedG;
+  if (unionG > 0) p += 0.06 * (sharedG / unionG);
   if (x.kind === y.kind && x.dropIn === y.dropIn) p += 0.012;
   if (a.service.serviceId === b.service.serviceId) p += 0.008;
   if ((x.related ?? []).includes(y.id) || (y.related ?? []).includes(x.id)) p += 0.02;
@@ -549,7 +569,7 @@ export function rankNewArrivals(arrivals: NewArrivals, who: Who, ctx: EngineCont
 
   for (const arrival of arrivals?.entries ?? []) {
     const info = index.byId.get(arrival.itemId);
-    if (!info || done.has(arrival.itemId)) continue;
+    if (!info || done.has(sameTitleKey(info.item))) continue;
     const item = info.item;
     const service = chooseService(item, plans);
     if (!service) continue;
@@ -562,13 +582,13 @@ export function rankNewArrivals(arrivals: NewArrivals, who: Who, ctx: EngineCont
     // A new season is about the new episodes, so don't point at an old standout episode.
     const pick = pickFor(item, Number.POSITIVE_INFINITY, !seenFlags.includes(false), 0, !isSeason);
     if (!pick) continue;
-    done.add(item.id);
+    done.add(sameTitleKey(item));
 
     const scores = people.map((p, k) => {
       const t = tasteParts(info, p, index);
       // A new season of something they already watch is the best news the feed can carry.
       const following = isSeason && seenFlags[k] ? 0.12 : 0;
-      return W_TASTE * t.taste + W_LEARN * t.learned + W_QUALITY * info.quality + W_POP * info.pop + t.corr + following;
+      return W_TASTE * t.taste + W_SHAPE * t.shape + W_LEARN * t.learned + W_QUALITY * info.quality + W_POP * info.pop + t.corr + following;
     });
     cards.push({
       itemId: item.id,

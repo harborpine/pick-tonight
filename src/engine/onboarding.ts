@@ -8,7 +8,7 @@
  * represented, so the grid isn't forty superhero films.
  */
 import type { Catalog, CatalogItem, PlanSelection } from '../contracts';
-import { getIndex } from './catalogIndex';
+import { getIndex, sameTitleKey } from './catalogIndex';
 import { chooseService } from './rules';
 
 export function onboardingTitles(catalog: Catalog, plans: PlanSelection, count: number): CatalogItem[] {
@@ -23,6 +23,12 @@ export function onboardingTitles(catalog: Catalog, plans: PlanSelection, count: 
       fame: 0.55 * Math.min(1, Math.log10(1 + Math.max(0, info.item.votes)) / 4.3) + 0.3 * info.pop + 0.15 * info.quality,
     }))
     .sort((a, b) => b.fame - a.fame || (a.info.item.id < b.info.item.id ? -1 : 1))
+    .filter(
+      (
+        (seen) => (e) =>
+          !seen.has(sameTitleKey(e.info.item)) && !!seen.add(sameTitleKey(e.info.item))
+      )(new Set<string>()),
+    )
     .slice(0, Math.max(n * 6, 200));
 
   const out: CatalogItem[] = [];

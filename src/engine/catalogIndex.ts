@@ -45,6 +45,8 @@ export interface CatalogIndex {
   genreWeight(g: GenreId): number;
   /** Share of catalog titles carrying each genre. */
   genreShare: Map<GenreId, number>;
+  /** Share of catalog titles carrying each trait. */
+  traitShare: Map<string, number>;
   builtYear: number;
 }
 
@@ -67,6 +69,10 @@ export function traitsOf(item: CatalogItem, builtYear: number): string[] {
   else if (item.attention === 'high') t.push('attention:high');
   if (item.year > 0 && item.year < 2000) t.push('classic');
   else if (item.year >= builtYear - 2) t.push('recent');
+  const cert = item.certification ?? '';
+  if (MATURE_CERTS.has(cert)) t.push('tone:mature');
+  else if (TEEN_CERTS.has(cert)) t.push('tone:teen');
+  else if (FAMILY_CERTS.has(cert)) t.push('tone:family');
   return t;
 }
 
@@ -85,10 +91,12 @@ const ANIME_KEYWORDS = new Set(['anime', 'based on manga', 'shounen', 'shonen', 
 const KIDS_CERTS = new Set(['TV-Y', 'TV-Y7', 'TV-Y7-FV']);
 
 /** Works for catalog items and for bare taste references (which have no certification). */
-export function nichesOf(t: TitleCore & { certification?: string }): NicheId[] {
+export function nichesOf(t: TitleCore & { certification?: string; attention?: string }): NicheId[] {
   const out: NicheId[] = [];
-  if ((t.keywords ?? []).some((k) => ANIME_KEYWORDS.has(k))) out.push('anime');
   const genres = t.genres ?? [];
+  // Anime is recognised by its tags, or (because the catalog marks every
+  // non-English title as needing full attention) as animation that needs full attention.
+  if ((t.keywords ?? []).some((k) => ANIME_KEYWORDS.has(k)) || (genres.includes('animation') && t.attention === 'high')) out.push('anime');
   if (
     t.kind === 'tv' &&
     (genres.includes('kids') || KIDS_CERTS.has(t.certification ?? '') || (t.certification === 'TV-G' && genres.includes('family')))
@@ -96,6 +104,15 @@ export function nichesOf(t: TitleCore & { certification?: string }): NicheId[] {
     out.push('kids');
   }
   return out;
+}
+
+const MATURE_CERTS = new Set(['TV-MA', 'R', 'NC-17']);
+const TEEN_CERTS = new Set(['TV-14', 'PG-13']);
+const FAMILY_CERTS = new Set(['TV-PG', 'PG', 'G', 'TV-G', 'TV-Y', 'TV-Y7', 'TV-Y7-FV']);
+
+/** Two catalog entries that are the same thing to a viewer (e.g. a show listed twice). */
+export function sameTitleKey(item: CatalogItem): string {
+  return `${item.kind}|${item.title.trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()}`;
 }
 
 const cache = new WeakMap<Catalog, CatalogIndex>();
@@ -186,5 +203,7 @@ function build(catalog: Catalog): CatalogIndex {
     };
   });
   const byId = new Map(infos.map((i) => [i.item.id, i]));
-  return { catalog, infos, byId, refs, kwWeight, genreWeight, genreShare, builtYear };
+  const traitShare = new Map<string, number>();
+  for (const info of infos) for (const t of info.traits) traitShare.set(t, (traitShare.get(t) ?? 0) + 1 / infos.length);
+  return { catalog, infos, byId, refs, kwWeight, genreWeight, genreShare, traitShare, builtYear };
 }

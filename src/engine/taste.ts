@@ -20,8 +20,8 @@ const W_FORMAT = 0.08;
 /** Resemblance below this is noise ("it's also a drama") and is ignored. */
 const SIM_FLOOR = 0.14;
 /** The best match counts fully, then each further favourite it resembles adds less. */
-const MULTI_WEIGHTS = [1, 0.5, 0.3, 0.2];
-const MULTI_NORM = 1.25;
+const MULTI_WEIGHTS = [1, 0.6, 0.4, 0.25];
+const MULTI_NORM = 1.55;
 /** A person's own favourite is, by definition, to their taste. */
 export const OWN_FAVOURITE_TASTE = 0.92;
 
@@ -55,6 +55,8 @@ export interface FavModel {
   genreShare: Map<GenreId, number>;
   kwCount: Map<string, number>;
   traitShare: Map<string, number>;
+  /** How much more (+) or less (-) common each trait is among the favourites than in the catalog. */
+  traitLift: Map<string, number>;
   /** Acquired tastes (anime, kids' shows) that at least one favourite belongs to. */
   niches: Set<NicheId>;
 }
@@ -134,7 +136,12 @@ function buildFavModel(index: CatalogIndex, favorites: readonly string[]): FavMo
   const niches = new Set<NicheId>();
   for (const f of favInfos) for (const x of nichesOf(f.item ?? f.core)) niches.add(x);
 
-  return { favIds, favs: favInfos.map((f) => f.core), score, matches, genreShare, kwCount, traitShare, niches };
+  const traitLift = new Map<string, number>();
+  if (withTraits >= 3) {
+    for (const [t, share] of index.traitShare) traitLift.set(t, (traitShare.get(t) ?? 0) - share);
+  }
+
+  return { favIds, favs: favInfos.map((f) => f.core), score, matches, genreShare, kwCount, traitShare, traitLift, niches };
 }
 
 /**
@@ -298,6 +305,27 @@ export function correctionDelta(info: ItemInfo, view: LearnedView): number {
   if (view.corrected.keywords.size) for (const k of info.kw) d += view.corrected.keywords.get(k) ?? 0;
   if (view.corrected.traits.size) for (const t of info.traits) d += view.corrected.traits.get(t) ?? 0;
   return clamp(d, -2, 2);
+}
+
+/**
+ * -1..1: does this title have the general shape of what the person loves?
+ * (Drop-in half-hours vs hour-long serials, films vs series, grown-up vs
+ * teen vs family rating, old vs new.) Positive when its traits are more common
+ * among their favourites than in the catalog at large. This is what separates
+ * two titles that both share nothing specific with any favourite.
+ */
+export function traitFit(info: ItemInfo, fav: FavModel): number {
+  if (!fav.traitLift.size || !info.traits.length) return 0;
+  let sum = 0;
+  let n = 0;
+  for (const t of info.traits) {
+    // Film-vs-series is left out: a favourites list that happens to be mostly
+    // series is no evidence of disliking films (swipes can still teach that).
+    if (t === 'kind:movie' || t === 'kind:tv') continue;
+    sum += fav.traitLift.get(t) ?? 0;
+    n++;
+  }
+  return n ? clamp((sum / n) * 2.2, -1, 1) : 0;
 }
 
 /** How much an acquired taste the person hasn't shown costs a title. */

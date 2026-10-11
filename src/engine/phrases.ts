@@ -38,6 +38,9 @@ export const TRAIT_PHRASES: Record<string, string> = {
   'attention:high': 'complicated shows that need your full attention',
   classic: 'older classics',
   recent: 'brand-new releases',
+  'tone:mature': 'grown-up, adults-only material',
+  'tone:teen': 'things rated for teens and up',
+  'tone:family': 'family-rated viewing',
 };
 
 /** Common catalogue keywords, phrased to fit after "You love ...". */
@@ -134,6 +137,24 @@ const KEYWORD_PHRASES: Record<string, string> = {
   sports: 'sports stories',
   christmas: 'Christmas stories',
   anime: 'anime',
+  'social satire': 'social satire',
+  'adult humor': 'grown-up humour',
+  'medical student': 'stories about medical students',
+  'searching for love': 'looking-for-love stories',
+  'game show': 'game shows',
+  'group of friends': 'stories about a group of friends',
+  'private school': 'private-school stories',
+  'dating reality show': 'dating shows',
+  'reality show': 'reality shows',
+  'workplace': 'workplace stories',
+  'washington dc, usa': 'stories set in Washington',
+  'sibling relationship': 'stories about siblings',
+  'suspenseful': 'suspense',
+  'thriller': 'thrillers',
+  'cartoon': 'cartoons',
+  'survival competition': 'survival contests',
+  'kingdom': 'tales of kings and kingdoms',
+  'dragon': 'stories with dragons',
 };
 
 export function keywordPhrase(k: string): string {
