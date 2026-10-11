@@ -35,9 +35,10 @@ export interface FloorInput {
 }
 
 export function passesFloor(x: FloorInput): boolean {
-  const recent = !!x.date && Date.parse(x.today) - Date.parse(x.date) < 540 * 86_400_000;
+  const ageDays = x.date ? (Date.parse(x.today) - Date.parse(x.date)) / 86_400_000 : 9999;
   const reality = x.genreIds.some((g) => g === 10764 || g === 10767);
-  const minVotes = recent ? 30 : x.kind === 'movie' ? 200 : reality ? 40 : 100;
+  // brand-new releases have hardly any votes yet; let them in so the New feed has something to show
+  const minVotes = ageDays < 75 ? 5 : ageDays < 540 ? 30 : x.kind === 'movie' ? 150 : reality ? 40 : 80;
   const minRating = reality ? 5.5 : 6.0;
   if (x.votes < minVotes) return false;
   if (x.rating < minRating) return false;

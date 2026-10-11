@@ -44,6 +44,8 @@ export const OVERRIDES: Override[] = [
   { kind: 'tv', title: 'The Great British Baking Show', attention: 'low', dropIn: true, moods: { cozy: 0.95, feelgood: 0.85, brainoff: 0.85 } },
   { kind: 'tv', title: 'Summer House', attention: 'low', dropIn: true },
   { kind: 'tv', title: 'Love Island', year: 2019, attention: 'low', dropIn: true },
+  { kind: 'tv', title: 'Love Island USA', attention: 'low', dropIn: true },
+  { kind: 'tv', title: 'You', year: 2018, attention: 'medium' },
 
   // Tense / gripping, but the owner's girlfriend watches them: must not be flagged scary.
   { kind: 'tv', title: 'Killing Eve', flags: NOT_SCARY },

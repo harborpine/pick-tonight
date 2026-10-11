@@ -29,6 +29,8 @@ export interface Parsed {
   providers: number[];
   related: string[];
   adult: boolean;
+  /** TV: TMDB had no episode_run_time, so `runtime` is a guess (last episode / genre default). */
+  runtimeGuess: boolean;
   /** Movie release date, or TV first air date (YYYY-MM-DD) when known. */
   releaseDate?: string;
   /** TV: premiere date of each season (>0). */
@@ -98,6 +100,7 @@ export function parseDetail(kind: TitleKind, d: any): Parsed | null {
     providers: usProviders(d),
     related: [...new Set<string>(related)],
     adult: !!d.adult,
+    runtimeGuess: kind === 'tv' && !(d.episode_run_time ?? []).some((x: number) => x > 0),
     releaseDate: date,
     seasonPremieres,
   };
@@ -110,7 +113,7 @@ const USEFUL = [
   'murder', 'romantic comedy', 'coming of age', 'workplace', 'hospital', 'high school', 'police', 'lawyer', 'political',
   'adult animation', 'satire', 'dark comedy', 'survival', 'espionage', 'war', 'heist', 'sports', 'musical', 'supernatural',
 ];
-export function capKeywords(all: string[], max = 12): string[] {
+export function capKeywords(all: string[], max = 10): string[] {
   const score = (k: string) => (countKw([k], USEFUL) > 0 ? 0 : 1);
   return [...all].map((k, i) => ({ k, i })).sort((a, b) => score(a.k) - score(b.k) || a.i - b.i).slice(0, max).map((x) => x.k);
 }
@@ -131,7 +134,7 @@ export function toTagInput(p: Parsed): TagInput {
   };
 }
 
-export function toCore(p: Parsed, maxRelated = 10): TitleCore {
+export function toCore(p: Parsed, maxRelated = 8): TitleCore {
   return {
     id: `${p.kind}-${p.tmdbId}`,
     tmdbId: p.tmdbId,
@@ -150,7 +153,7 @@ export function toCatalogItem(p: Parsed): CatalogItem {
     ...toCore(p),
     poster: p.poster,
     backdrop: p.backdrop,
-    overview: truncate(p.overview, 220),
+    overview: truncate(p.overview, 170),
     runtime: p.runtime,
     ...(p.kind === 'tv' ? { seasons: p.seasons } : {}),
     ...(p.certification ? { certification: p.certification } : {}),

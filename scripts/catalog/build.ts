@@ -14,7 +14,7 @@ import { pickStandouts, seasonsToFetch, type RawEpisode } from './standout';
 import { diffArrivals, prevFromPool, type Pool, type SeedInfo } from './diff';
 import { allSeedTitles, chooseSearchResult, SEED_IDS, type SeedTitle } from './seeds';
 import { countByDefaultService, validateCatalog, LIMITS } from './validate';
-import { isoDate, pMap, sleep } from './util';
+import { isoDate, median, pMap, sleep } from './util';
 
 const SITE = process.env.SITE_URL ?? 'https://harrisonglantz.github.io/what-to-watch';
 const OUT_DIR = path.resolve('public/data');
@@ -44,7 +44,7 @@ async function discover(tmdb: TmdbClient, today: string): Promise<Map<string, Ca
       jobs.push({ kind, provider, sort: 'popularity.desc', pages: 12, extra: {} });
       jobs.push({ kind, provider, sort: 'vote_count.desc', pages: 12, extra: {} });
       jobs.push({ kind, provider, sort: 'vote_average.desc', pages: 6, extra: { 'vote_count.gte': kind === 'movie' ? 500 : 250 } });
-      jobs.push({ kind, provider, sort: `${dateField}.desc`, pages: 5, extra: { 'vote_count.gte': 30, [`${dateField}.lte`]: today } });
+      jobs.push({ kind, provider, sort: `${dateField}.desc`, pages: 5, extra: { 'vote_count.gte': 5, [`${dateField}.lte`]: today } });
     }
   }
   const pageTasks: { job: Job; page: number }[] = jobs.flatMap((job) => Array.from({ length: job.pages }, (_, i) => ({ job, page: i + 1 })));
@@ -154,12 +154,12 @@ async function writeCache(file: string, data: unknown) {
   }
 }
 
-async function fetchEpisodes(tmdb: TmdbClient, item: CatalogItem): Promise<RawEpisode[] | null> {
+async function fetchEpisodes(tmdb: TmdbClient, item: CatalogItem, maxSeasons: number): Promise<RawEpisode[] | null> {
   const total = item.seasons ?? 1;
-  const file = path.join(CACHE_DIR, 'episodes', `${item.id}-s${total}.json`);
+  const file = path.join(CACHE_DIR, 'episodes', `${item.id}-s${total}-m${maxSeasons}.json`);
   const cached = await readCache(file, 30);
   if (cached) return cached;
-  const wanted = seasonsToFetch(total);
+  const wanted = seasonsToFetch(total, maxSeasons);
   const episodes: RawEpisode[] = [];
   try {
     for (let i = 0; i < wanted.length; i += 20) {
@@ -175,7 +175,7 @@ async function fetchEpisodes(tmdb: TmdbClient, item: CatalogItem): Promise<RawEp
   return episodes;
 }
 
-async function addStandouts(tmdb: TmdbClient, items: CatalogItem[], anthologyIds: Set<string>) {
+async function addStandouts(tmdb: TmdbClient, items: CatalogItem[], anthologyIds: Set<string>, guessRuntime: Set<string>) {
   const shows = items
     .filter((i) => i.kind === 'tv' && (i.dropIn || anthologyIds.has(i.id)) && (i.seasons ?? 0) >= 1)
     .sort((a, b) => b.popularity - a.popularity)
@@ -184,14 +184,35 @@ async function addStandouts(tmdb: TmdbClient, items: CatalogItem[], anthologyIds
   await pMap(
     shows,
     async (show) => {
-      const eps = await fetchEpisodes(tmdb, show);
+      const eps = await fetchEpisodes(tmdb, show, 16);
       if (!eps) return;
       show.standout = pickStandouts(eps);
       if (show.standout.length) withStandouts++;
+      if (guessRuntime.has(show.id)) fixRuntime(show, eps);
     },
     8,
   );
+  // Everything else whose episode length is only a guess: sample a few seasons for the typical episode runtime.
+  const others = items.filter((i) => i.kind === 'tv' && guessRuntime.has(i.id) && !shows.includes(i));
+  let fixed = 0;
+  await pMap(
+    others,
+    async (show) => {
+      const eps = await fetchEpisodes(tmdb, show, 3);
+      if (eps && fixRuntime(show, eps)) fixed++;
+    },
+    8,
+  );
+  log(`Episode runtimes: ${guessRuntime.size} shows had no typical length from TMDB; corrected ${fixed + shows.filter((s) => guessRuntime.has(s.id)).length}`);
   log(`Standout episodes: looked at ${shows.length} shows, ${withStandouts} have at least one`);
+}
+
+/** Typical episode length = median of real episode runtimes (ignores specials and double-length finales). */
+function fixRuntime(show: CatalogItem, eps: RawEpisode[]): boolean {
+  const rts = eps.filter((e) => e.season_number > 0 && (e.runtime ?? 0) > 0).map((e) => e.runtime as number);
+  if (rts.length < 3) return false;
+  show.runtime = Math.round(median(rts));
+  return show.runtime > 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -268,6 +289,7 @@ async function main() {
   const items: CatalogItem[] = [];
   const info = new Map<string, SeedInfo>();
   const anthologyIds = new Set<string>();
+  const guessRuntime = new Set<string>();
   for (const [key, p] of parsedAll) {
     if (!p.providers.length || p.adult) continue;
     pool.titles[key] = { p: p.providers, ...(p.seasons ? { s: p.seasons } : {}) };
@@ -280,11 +302,12 @@ async function main() {
     items.push(item);
     info.set(item.id, { releaseDate: p.releaseDate, seasonPremieres: p.seasonPremieres });
     if (p.allKeywords.includes('anthology')) anthologyIds.add(item.id);
+    if (p.runtimeGuess) guessRuntime.add(item.id);
   }
   log(`Eligible after quality floor: ${items.length} titles on our providers`);
 
   let chosen = selectItems(items, { ...TARGET, mustKeep: seedOnService });
-  await addStandouts(tmdb, chosen, anthologyIds);
+  await addStandouts(tmdb, chosen, anthologyIds, guessRuntime);
 
   // Assemble, trimming until under the size budget
   const assemble = (list: CatalogItem[]): Catalog => ({ schema: 1, builtAt, items: list, tasteRefs, seedFavorites });

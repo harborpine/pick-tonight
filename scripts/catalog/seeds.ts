@@ -50,10 +50,42 @@ export const SEED_HINTS: Record<string, SeedHint> = {
 };
 
 /**
- * Ids confirmed from a workflow run log ("SEED RESOLVED" lines). Empty entries fall back to search.
+ * Ids confirmed from the workflow run of 10 Oct 2026 ("SEED RESOLVED" lines). Missing entries fall back to search.
  * Key: `${kind}|${title}`.
  */
-export const SEED_IDS: Record<string, number> = {};
+export const SEED_IDS: Record<string, number> = {
+"movie|Forrest Gump": 13, // Forrest Gump (1994)
+  "movie|The Hateful Eight": 273248, // The Hateful Eight (2015)
+  "movie|The Hunger Games": 70160, // The Hunger Games (2012)
+  "tv|Community": 18347, // Community (2009)
+  "tv|Crazy Ex-Girlfriend": 63161, // Crazy Ex-Girlfriend (2015)
+  "tv|Curb Your Enthusiasm": 4546, // Curb Your Enthusiasm (2000)
+  "tv|Disenchantment": 73021, // Disenchantment (2018)
+  "tv|Family Guy": 1434, // Family Guy (1999)
+  "tv|Friends": 1668, // Friends (1994)
+  "tv|Game of Thrones": 1399, // Game of Thrones (2011)
+  "tv|Gilmore Girls": 4586, // Gilmore Girls (2000)
+  "tv|Gossip Girl": 1395, // Gossip Girl (2007)
+  "tv|Grey's Anatomy": 1416, // Grey's Anatomy (2005)
+  "tv|How I Met Your Mother": 1100, // How I Met Your Mother (2005)
+  "tv|How to Get Away with Murder": 61056, // How to Get Away with Murder (2014)
+  "tv|Killing Eve": 72750, // Killing Eve (2018)
+  "tv|Love Island": 90521, // Love Island USA (2019)
+  "tv|Paradise": 245927, // Paradise (2025)
+  "tv|Scandal": 39269, // Scandal (2012)
+  "tv|Scrubs": 4556, // Scrubs (2001)
+  "tv|Shameless": 34307, // Shameless (2011)
+  "tv|South Park": 2190, // South Park (1997)
+  "tv|Squid Game": 93405, // Squid Game (2021)
+  "tv|Summer House": 69720, // Summer House (2017)
+  "tv|Survivor": 14658, // Survivor (2000)
+  "tv|The Devil's Plan": 214582, // The Devil's Plan (2023)
+  "tv|The Great British Baking Show": 34549, // The Great British Bake Off (2010)
+  "tv|The Simpsons": 456, // The Simpsons (1989)
+  "tv|The Traitors": 215943, // The Traitors (2023)
+  "tv|Why Women Kill": 87428, // Why Women Kill (2019)
+  "tv|You": 78191, // You (2018)
+};
 
 export const hintKey = (kind: TitleKind, title: string) => `${kind}|${title}`;
 

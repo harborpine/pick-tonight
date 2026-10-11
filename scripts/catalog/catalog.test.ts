@@ -155,9 +155,9 @@ describe('tagging of famous titles', () => {
 describe('parsing', () => {
   it('trims overview, caps keywords/related, omits undefined fields, runtime > 0', () => {
     const i = tvItem({ name: 'Long', genres: genres(G.drama), keywords: Array.from({ length: 40 }, (_, n) => `k${n}`), recommendations: { results: Array.from({ length: 30 }, (_, n) => ({ id: n + 100 })) } });
-    expect(i.overview.length).toBeLessThanOrEqual(221);
-    expect(i.keywords.length).toBe(12);
-    expect(i.related.length).toBe(10);
+    expect(i.overview.length).toBeLessThanOrEqual(171);
+    expect(i.keywords.length).toBe(10);
+    expect(i.related.length).toBe(8);
     expect(i.runtime).toBeGreaterThan(0);
     expect(i.id).toBe(`tv-${i.tmdbId}`);
     const json = JSON.parse(JSON.stringify(movieItem({ title: 'M', release_dates: { results: [] } })));
@@ -363,3 +363,18 @@ describe('catalog validation', () => {
 
 // keep the unused-import checker honest
 void ([] as TagInput[]);
+
+describe('flag tuning', () => {
+  it('anime with demons is not horror or scary; Riverdale-style murder mystery is not true crime', () => {
+    const anime = tvItem({ name: 'Demon Fighters', genres: genres(G.animation, G.fantasy), keywords: ['demon', 'supernatural', 'exorcism', 'based on manga'] });
+    expect(anime.flags).toEqual({ horror: false, trueCrime: false, scary: false });
+    const teen = tvItem({ name: 'Teen Murder', genres: genres(G.drama, G.mystery, G.crime), keywords: ['murder investigation', 'cold case', 'high school'] });
+    expect(teen.flags.trueCrime).toBe(false);
+  });
+  it('a dramatised true story of a serial killer is true crime', () => {
+    expect(tvItem({ name: 'Monster', genres: genres(G.drama, G.crime), keywords: ['serial killer', 'true story', 'murder'] }).flags.trueCrime).toBe(true);
+  });
+  it('game show keyword alone does not make a drama drop-in', () => {
+    expect(tvItem({ name: 'Deadly Games', genres: genres(G.drama), keywords: ['fictional game show', 'game show'] }).dropIn).toBe(false);
+  });
+});

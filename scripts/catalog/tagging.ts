@@ -84,22 +84,22 @@ const COMPLEX_KW = [
   'psychological thriller', 'subtitled', 'philosophy', 'espionage', 'cold war', 'surrealism', 'dream within a dream',
 ];
 const SITCOM_KW = ['sitcom', 'workplace comedy', 'hangout comedy', 'mockumentary', 'sketch comedy', 'stand-up comedy', 'adult animation', 'cringe comedy', 'family sitcom'];
-const PROCEDURAL_KW = ['procedural', 'police procedural', 'case of the week', 'episodic', 'monster of the week', 'anthology', 'game show', 'talk show', 'late night', 'sketch comedy', 'news magazine'];
+const PROCEDURAL_KW = ['procedural', 'police procedural', 'case of the week', 'episodic', 'monster of the week', 'anthology', 'talk show', 'late night', 'sketch comedy', 'news magazine'];
 const COMPETITION_KW = ['competition', 'strategy', 'elimination', 'social game', 'deception', 'survival', 'puzzle', 'game'];
 const EASY_REALITY_KW = ['baking', 'cooking', 'cooking competition', 'food', 'chef', 'dating show', 'dating', 'docusoap', 'makeover', 'home renovation', 'house hunting', 'home improvement', 'fashion', 'lifestyle', 'talent show', 'singing competition', 'family'];
 const NATURE_KW = ['nature', 'wildlife', 'animals', 'travel', 'cooking', 'food'];
 
 const HORROR_KW = [
   'horror', 'slasher', 'gore', 'splatter', 'body horror', 'psychological horror', 'supernatural horror', 'haunted house',
-  'exorcism', 'demonic possession', 'possession', 'zombie', 'werewolf', 'creature feature', 'found footage', 'ghost story',
-  'folk horror', 'cosmic horror', 'survival horror', 'occult', 'satanic', 'cannibal', 'demon',
+  'demonic possession', 'zombie', 'creature feature', 'found footage', 'ghost story',
+  'folk horror', 'cosmic horror', 'survival horror', 'satanic',
 ];
 const SCARY_KW = [
-  'supernatural', 'monster', 'serial killer', 'haunted', 'ghost', 'demon', 'vampire', 'undead', 'creepy', 'disturbing',
-  'torture', 'paranormal', 'curse', 'cursed', 'witch', 'evil spirit', 'stalker', 'home invasion', 'psychopath', 'gruesome',
-  'nightmare', 'killer', 'macabre', 'dark fantasy', 'apocalypse', 'alien invasion',
+  'monster', 'serial killer', 'haunted', 'ghost', 'demon', 'vampire', 'werewolf', 'undead', 'creepy', 'disturbing',
+  'torture', 'paranormal', 'evil spirit', 'home invasion', 'psychopath', 'gruesome', 'macabre', 'exorcism', 'possession',
+  'occult', 'cannibal', 'stalker',
 ];
-const TRUE_CRIME_KW = ['true crime', 'true-crime', 'cold case', 'unsolved murder', 'unsolved mysteries', 'murder investigation', 'serial killer documentary', 'wrongful conviction', 'crime documentary'];
+const TRUE_CRIME_KW = ['true crime', 'true-crime', 'unsolved murder', 'serial killer documentary', 'crime documentary'];
 const TRUE_CRIME_NAME = /^(dateline|48 hours|20\/20|forensic files|snapped|cold case files|unsolved mysteries|american greed|the first 48|i \(almost\) got away with it|making a murderer|the jinx|the staircase|how to catch a killer|crime scene|murder in the|killer couples|deadly women|true crime|evil lives here|a body in the)/i;
 
 // ---------------------------------------------------------------------------
@@ -137,13 +137,17 @@ export function computeFlags(t: TagInput): Tags['flags'] {
   const horror = g.has('horror') || hasKw(t.keywords, HORROR_KW);
   // Comedies that merely mention ghosts / vampires / witches (What We Do in the Shadows, Ghosts) are not scary.
   const comedyOnly = g.has('comedy') && !g.has('horror');
-  let scary = horror || (!comedyOnly && hasKw(t.keywords, SCARY_KW));
+  // Animation (anime, kids) only counts as scary through explicit horror keywords; "supernatural" needs a dark genre.
+  const animated = g.has('animation') || g.has('kids') || g.has('family');
+  const supernatural = hasKw(t.keywords, ['supernatural']) && (['drama', 'mystery', 'thriller', 'scifi'] as GenreId[]).some((x) => g.has(x)) && !animated && !g.has('romance') && !g.has('fantasy');
+  let scary = horror || (!comedyOnly && !animated && (hasKw(t.keywords, SCARY_KW) || supernatural));
   if (comedyOnly && countKw(t.keywords, HORROR_KW) >= 2) scary = true;
   const doc = g.has('documentary');
   const trueCrime =
     hasKw(t.keywords, TRUE_CRIME_KW) ||
     (doc && g.has('crime')) ||
-    (doc && hasKw(t.keywords, ['murder', 'serial killer', 'police investigation'])) ||
+    (doc && hasKw(t.keywords, ['murder', 'serial killer', 'police investigation', 'wrongful conviction', 'trial', 'cold case'])) ||
+    (g.has('crime') && hasKw(t.keywords, ['true story', 'based on true story', 'based on a true story']) && hasKw(t.keywords, ['murder', 'serial killer'])) ||
     TRUE_CRIME_NAME.test(t.title);
   return { horror, trueCrime, scary };
 }
@@ -283,7 +287,7 @@ export function computeMoods(t: TagInput, attention: Attention, flags: Tags['fla
   else if (g.has('scifi')) m.gripped += 0.3;
   if (g.has('reality') && hasKw(kw, COMPETITION_KW)) m.gripped = Math.max(m.gripped, 0.5);
   if (hasKw(kw, ['cliffhanger', 'twist ending', 'plot twist', 'conspiracy', 'suspense', 'edge of your seat', 'whodunit', 'cat and mouse'])) m.gripped += 0.2;
-  if (g.has('comedy') && !g.has('thriller') && !g.has('mystery')) m.gripped -= 0.2;
+  if (g.has('comedy') && !g.has('drama') && !g.has('thriller') && !g.has('mystery')) m.gripped -= 0.2;
   if (t.rating >= 7.8 && m.gripped > 0) m.gripped += 0.1;
 
   // feelgood
