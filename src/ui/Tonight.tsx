@@ -178,9 +178,9 @@ function Ask() {
 
       <section className="ask-group" data-testid="ask-group-time">
         <h2>Time</h2>
-        <div className="chip-row">
+        <div className="chip-row wrap">
           {TIME_OPTIONS.map((t) => (
-            <Chip key={t.value} selected={req.time === t.value} testId={`ask-time-${t.value}`} onClick={() => set('time', t.value)}>
+            <Chip small key={t.value} selected={req.time === t.value} testId={`ask-time-${t.value}`} onClick={() => set('time', t.value)}>
               {t.label}
             </Chip>
           ))}
