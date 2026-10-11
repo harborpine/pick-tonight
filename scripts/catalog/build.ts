@@ -52,6 +52,7 @@ async function discover(tmdb: TmdbClient, today: string): Promise<Map<string, Ca
   const pageTasks: { job: Job; page: number }[] = jobs.flatMap((job) => Array.from({ length: job.pages }, (_, i) => ({ job, page: i + 1 })));
   const lastPage = new Map<Job, number>();
   let failed = 0;
+  const dbg = { rows: 0, kept: 0, floored: [] as string[] };
   await pMap(
     pageTasks,
     async ({ job, page }) => {
@@ -68,13 +69,17 @@ async function discover(tmdb: TmdbClient, today: string): Promise<Map<string, Ca
           ...job.extra,
         });
         if (page >= (res.total_pages ?? 1)) lastPage.set(job, res.total_pages ?? 1);
+        const gj = (job.extra as any).with_genres;
+        if (gj === 10764) dbg.rows += (res.results ?? []).length;
         for (const r of res.results ?? []) {
           if (r.adult) continue;
           const date = (job.kind === 'movie' ? r.release_date : r.first_air_date) || undefined;
           if (!passesFloor({ kind: job.kind, votes: r.vote_count ?? 0, rating: r.vote_average ?? 0, genreIds: r.genre_ids ?? [], date, today })) {
             skippedByFloor++;
+            if (gj === 10764) dbg.floored.push(`${r.name} v${r.vote_count} r${r.vote_average}`);
             continue;
           }
+          if (gj === 10764) dbg.kept++;
           found.set(`${job.kind}-${r.id}`, { kind: job.kind, id: r.id });
         }
       } catch (e) {
@@ -84,6 +89,7 @@ async function discover(tmdb: TmdbClient, today: string): Promise<Map<string, Ca
     },
     24,
   );
+  log(`Reality discovery: ${dbg.rows} rows, ${dbg.kept} kept; floored sample: ${dbg.floored.slice(0, 15).join(' | ')}`);
   log(`Discover: ${pageTasks.length} pages requested, ${failed} failed; ${found.size} candidates (${skippedByFloor} rows under the quality floor)`);
   return found;
 }
