@@ -1,0 +1,32 @@
+name: TMDB check
+
+# Setup proof: confirms the TMDB_TOKEN secret works and prints the US
+# streaming providers whose names match our six services.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: List matching US providers
+        env:
+          TMDB_TOKEN: ${{ secrets.TMDB_TOKEN }}
+        run: |
+          if [ -z "$TMDB_TOKEN" ]; then
+            echo "TMDB_TOKEN secret is missing"; exit 1
+          fi
+          for kind in movie tv; do
+            echo "== $kind providers (US) =="
+            curl -sS --fail-with-body \
+              -H "Authorization: Bearer $TMDB_TOKEN" \
+              -H "Accept: application/json" \
+              "https://api.themoviedb.org/3/watch/providers/$kind?watch_region=US&language=en-US" \
+              | jq -r '.results[]
+                  | select(.provider_name | test("netflix|disney|hulu|hbo|max|peacock|paramount"; "i"))
+                  | "\(.provider_id)\t\(.provider_name)"' \
+              | sort -n
+          done
