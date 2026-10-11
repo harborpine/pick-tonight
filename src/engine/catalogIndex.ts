@@ -29,6 +29,13 @@ export interface ItemInfo {
   pop: number;
   /** Acquired tastes this title belongs to (see NICHES), usually empty. */
   niches: NicheId[];
+  /**
+   * 0.3..1: how far "it resembles your favourites" is allowed to carry this
+   * title. Full for anything decently rated by enough people; reduced when
+   * the rating is poor, and when so few people have rated it that a good
+   * number means little. Resemblance alone must not put a dud at the top.
+   */
+  trust: number;
   /** Engine-defined traits, e.g. 'dropIn', 'kind:movie', 'short'. */
   traits: string[];
 }
@@ -52,6 +59,12 @@ export interface CatalogIndex {
 
 /** Votes a title needs before its own rating outweighs the catalog average. */
 const VOTE_PRIOR = 250;
+/** Trust in resemblance: full at a vote-adjusted rating of TRUST_FINE, halved by TRUST_POOR and below. */
+const TRUST_FINE = 7.0;
+const TRUST_POOR = 6.0;
+/** ...and scaled from TRUST_UNPROVEN (nobody has rated it) up to 1 (hundreds have); half-way at TRUST_VOTES votes. */
+const TRUST_UNPROVEN = 0.6;
+const TRUST_VOTES = 60;
 
 /**
  * Traits are the non-genre, non-keyword things people have tastes about:
@@ -199,6 +212,7 @@ function build(catalog: Catalog): CatalogIndex {
       quality: clamp((bayes - 5.8) / 2.8),
       pop: 0.6 * voteRank[k] + 0.4 * popRank[k],
       niches,
+      trust: clamp(0.5 + (bayes - TRUST_POOR) / (2 * (TRUST_FINE - TRUST_POOR)), 0.5, 1) * (TRUST_UNPROVEN + (1 - TRUST_UNPROVEN) * (votes / (votes + TRUST_VOTES))),
       traits: traitsOf(item, builtYear),
     };
   });

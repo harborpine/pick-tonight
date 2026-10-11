@@ -88,8 +88,8 @@ const W_LENGTH = 0.16;
 const W_FORMAT = 0.05;
 const W_MOOD = 0.4;
 const MOOD_FLOOR = 0.25;
-const W_CORRECTION = 0.16;
-const CORRECTION_CAP = 0.36;
+const W_CORRECTION = 0.3;
+const CORRECTION_CAP = 0.5;
 /** Together: weight on the less keen person's score. */
 const TOGETHER_MIN_WEIGHT = 0.78;
 /** Mood: drop titles under MOOD_DROP_BELOW when at least MOOD_POOL titles reach MOOD_GOOD. */
@@ -144,18 +144,19 @@ const MOOD_REASONS: Record<MoodId, string> = {
 /**
  * raw  = the catalog's fit for the requested mood (used for the keep/drop gates);
  * near = raw, or partial credit from a neighbouring mood (also a gate);
- * eff  = what scoring uses: `near` on a curve that flattens toward the top
- *        (see MOOD_CURVE). Mood tags are estimates, so the gap between "fits"
- *        (0.7) and "fits perfectly" (1.0) is deliberately small, while the gap
- *        between "barely" (0.3) and "fits" stays large.
+ * eff  = what scoring uses: `near` on MOOD_CURVE, which is close to a straight
+ *        line. (An earlier catalog had crude mood tags and needed the top of
+ *        the scale flattened; the tags are now trustworthy, so 0.7 vs 0.95
+ *        counts for what it says. The catalog tops out at 0.95, treated as full.)
  */
 /** [catalog mood fit, value used for scoring], joined by straight lines. */
 const MOOD_CURVE: [number, number][] = [
   [0, 0],
   [0.3, 0.25],
-  [0.5, 0.55],
-  [0.7, 0.85],
-  [0.85, 0.95],
+  [0.5, 0.5],
+  [0.7, 0.72],
+  [0.85, 0.89],
+  [0.95, 1],
   [1, 1],
 ];
 function moodCurve(x: number): number {
@@ -249,12 +250,20 @@ function personCtx(person: PersonId, ctx: EngineContext): PersonCtx {
 /** Taste + learning + corrections for one person; the request-independent half. */
 function tasteParts(info: ItemInfo, p: PersonCtx, index: CatalogIndex): { taste: number; shape: number; learned: number; corr: number; isFav: boolean } {
   const isFav = p.fav.favIds.has(info.item.id);
-  const taste = isFav ? Math.max(OWN_FAVOURITE_TASTE, p.fav.score[info.idx]) : p.fav.score[info.idx];
+  // Their own favourite is to their taste whatever anyone else rated it; for everything
+  // else, resemblance counts only as far as the title's rating can be trusted.
+  const taste = isFav ? Math.max(OWN_FAVOURITE_TASTE, p.fav.score[info.idx]) : p.fav.score[info.idx] * info.trust;
+  // Manual corrections outrank learning: on a title they asked for less of,
+  // nothing learned may count in its favour (and the reverse for "more").
+  const delta = correctionDelta(info, p.view);
+  let learned = learnedScore(info, p.view, index);
+  if (delta < 0) learned = Math.min(0, learned);
+  else if (delta > 0) learned = Math.max(0, learned);
   return {
     taste,
     shape: isFav ? 0 : traitFit(info, p.fav),
-    learned: learnedScore(info, p.view, index),
-    corr: clamp(W_CORRECTION * correctionDelta(info, p.view), -CORRECTION_CAP, CORRECTION_CAP) + nichePenalty(info, p.fav, p.view),
+    learned,
+    corr: clamp(W_CORRECTION * delta, -CORRECTION_CAP, CORRECTION_CAP) + nichePenalty(info, p.fav, p.view),
     isFav,
   };
 }

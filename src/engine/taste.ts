@@ -25,12 +25,48 @@ const MULTI_NORM = 1.55;
 /** A person's own favourite is, by definition, to their taste. */
 export const OWN_FAVOURITE_TASTE = 0.92;
 
+/**
+ * SUPPORT: one favourite should not speak for the whole person. A feature
+ * (keyword or genre) shared with a favourite counts in full only when several
+ * favourites have it; a feature only ONE favourite has counts for less.
+ * (BG's single animated favourite among twenty-two must not fill her decks
+ * with adult animation, while HG's four animated favourites rightly do.)
+ * Only applied once there are enough favourites for "only one" to mean something.
+ */
+const SUPPORT_MIN_FAVS = 6;
+/** Keyword shared with 1 / 2 / 3+ favourites. */
+const KW_SUPPORT = [0.65, 0.85, 1];
+/** Genre shared with 1 / 2 / 3+ favourites. */
+const GENRE_SUPPORT = [0.5, 0.75, 1];
+/**
+ * Genres that define a whole FORMAT rather than a theme. A title in a format
+ * that none / one / two of the favourites are in has its whole resemblance
+ * scaled by FORMAT_SUPPORT[0 / 1 / 2] (three or more: no change).
+ */
+const FORMAT_GENRES: GenreId[] = ['animation', 'reality', 'documentary', 'talk', 'kids'];
+const FORMAT_SUPPORT = [0.5, 0.6, 0.85];
+
+/**
+ * A favourite is only NAMED as a reason ("Because you love X") when the title
+ * visibly has something in common with it — shared themes and/or genres. A
+ * bare "people also watched" link from the catalog is too noisy to say out loud.
+ */
+const NAME_MIN_EVIDENCE = 0.7;
+const NAME_KEYWORDS_ALONE = 0.6;
+
 export interface FavMatch {
   /** Title of the favourite it resembles. */
   title: string;
   favId: string;
   sim: number;
 }
+
+interface Support {
+  on: boolean;
+  kwCount: Map<string, number>;
+  genreCount: Map<GenreId, number>;
+}
+const step = (table: number[], count: number) => table[Math.min(table.length, Math.max(1, count)) - 1];
 
 interface FavInfo {
   core: TitleCore;
@@ -49,7 +85,10 @@ export interface FavModel {
   favs: TitleCore[];
   /** 0..1 resemblance to the favourites, per catalog item (by ItemInfo.idx). */
   score: Float32Array;
-  /** The favourites each item most resembles (best first, itself excluded), for the reasons line. */
+  /**
+   * The favourites each item resembles closely enough, and visibly enough, to
+   * be named in a reason (best first, itself excluded).
+   */
   matches: FavMatch[][];
   /** Share of favourites carrying each genre / keyword / trait. */
   genreShare: Map<GenreId, number>;
@@ -93,25 +132,29 @@ function buildFavModel(index: CatalogIndex, favorites: readonly string[]): FavMo
     favInfos.push(favInfo(core, index));
   }
 
+  const support = supportOf(favInfos);
   const n = index.infos.length;
   const score = new Float32Array(n);
   const matches: FavMatch[][] = new Array(n);
-  const sims: { f: FavInfo; s: number }[] = [];
+  const sims: { f: FavInfo; s: number; named: boolean }[] = [];
 
   for (const info of index.infos) {
     sims.length = 0;
     for (const f of favInfos) {
       if (f.core.id === info.item.id) continue;
-      const s = similarity(info, f, index);
-      if (s > SIM_FLOOR) sims.push({ f, s });
+      const p = similarityParts(info, f, index, support, false);
+      if (p.sim > SIM_FLOOR) sims.push({ f, s: p.sim, named: p.named });
     }
     sims.sort((a, b) => b.s - a.s || (a.f.core.id < b.f.core.id ? -1 : 1));
     let total = 0;
     for (let k = 0; k < sims.length && k < MULTI_WEIGHTS.length; k++) {
       total += MULTI_WEIGHTS[k] * ((sims[k].s - SIM_FLOOR) / (1 - SIM_FLOOR));
     }
-    score[info.idx] = clamp(total / MULTI_NORM);
-    matches[info.idx] = sims.slice(0, 3).map((x) => ({ title: x.f.core.title, favId: x.f.core.id, sim: x.s }));
+    score[info.idx] = clamp((total / MULTI_NORM) * formatSupport(info, support));
+    matches[info.idx] = sims
+      .filter((x) => x.named)
+      .slice(0, 3)
+      .map((x) => ({ title: x.f.core.title, favId: x.f.core.id, sim: x.s }));
   }
 
   // What the favourites have in common (for the "what it has learned" page and learning).
@@ -144,6 +187,39 @@ function buildFavModel(index: CatalogIndex, favorites: readonly string[]): FavMo
   return { favIds, favs: favInfos.map((f) => f.core), score, matches, genreShare, kwCount, traitShare, traitLift, niches };
 }
 
+function supportOf(favInfos: FavInfo[]): Support {
+  const kwCount = new Map<string, number>();
+  const genreCount = new Map<GenreId, number>();
+  for (const f of favInfos) {
+    for (const k of f.kw.keys()) kwCount.set(k, (kwCount.get(k) ?? 0) + 1);
+    for (const g of f.genres) genreCount.set(g, (genreCount.get(g) ?? 0) + 1);
+  }
+  return { on: favInfos.length >= SUPPORT_MIN_FAVS, kwCount, genreCount };
+}
+
+/** 0.5..1: scales a title's whole resemblance when its format is one the favourites barely touch. */
+function formatSupport(info: ItemInfo, support: Support): number {
+  if (!support.on) return 1;
+  let factor = 1;
+  for (const g of FORMAT_GENRES) {
+    if (!info.item.genres.includes(g)) continue;
+    const count = support.genreCount.get(g) ?? 0;
+    if (count < FORMAT_SUPPORT.length) factor = Math.min(factor, FORMAT_SUPPORT[count]);
+  }
+  return factor;
+}
+
+interface SimilarityParts {
+  sim: number;
+  kw: number;
+  genre: number;
+  rel: number;
+  format: number;
+  /** Enough visibly in common to name this favourite as a reason. */
+  named: boolean;
+  sharedKw: string[];
+}
+
 /**
  * How much one title resembles one favourite, 0..1.
  *  - shared keywords, rarer ones counting for more (the heart of it);
@@ -152,36 +228,40 @@ function buildFavModel(index: CatalogIndex, favorites: readonly string[]): FavMo
  *    plus having recommended titles in common);
  *  - same kind of thing (movie vs series, drop-in vs serialized, similar length).
  */
-function similarity(info: ItemInfo, f: FavInfo, index: CatalogIndex): number {
-  return similarityParts(info, f, index).sim;
-}
-
-function similarityParts(info: ItemInfo, f: FavInfo, index: CatalogIndex): { sim: number; kw: number; genre: number; rel: number; format: number; sharedKw: string[] } {
+function similarityParts(info: ItemInfo, f: FavInfo, index: CatalogIndex, support: Support, listKeywords: boolean): SimilarityParts {
   const item = info.item;
 
+  // Keywords: `shared` is support-weighted (used for the score); `sharedPlain` is not (used for naming).
   let shared = 0;
+  let sharedPlain = 0;
   const sharedKw: string[] = [];
   for (const k of info.kw) {
     const w = f.kw.get(k);
     if (w !== undefined) {
-      shared += w;
-      sharedKw.push(k);
+      sharedPlain += w;
+      shared += support.on ? w * step(KW_SUPPORT, support.kwCount.get(k) ?? 1) : w;
+      if (listKeywords) sharedKw.push(k);
     }
   }
-  let kw = 0;
-  if (shared > 0) {
-    const saturating = 1 - Math.exp(-shared / KW_SCALE);
-    const dice = (2 * shared) / (info.kwWeightSum + f.kwWeightSum);
-    kw = 0.7 * saturating + 0.3 * dice;
-  }
+  const kwOf = (x: number) => (x > 0 ? 0.7 * (1 - Math.exp(-x / KW_SCALE)) + 0.3 * ((2 * x) / (info.kwWeightSum + f.kwWeightSum)) : 0);
+  const kw = kwOf(shared);
+  const kwPlain = support.on ? kwOf(sharedPlain) : kw;
 
   let sharedG = 0;
-  for (const g of item.genres) if (f.genres.has(g)) sharedG += index.genreWeight(g);
-  const unionG = info.genreWeightSum + f.genreWeightSum - sharedG;
+  let sharedGPlain = 0;
   // Sharing only a catch-all genre ("it's also a drama") says much less than sharing a rare one.
   let rarest = 0;
-  for (const g of item.genres) if (f.genres.has(g)) rarest = Math.max(rarest, index.genreWeight(g));
-  const genre = unionG > 0 ? (sharedG / unionG) * (0.4 + 0.6 * rarest) : 0;
+  for (const g of item.genres) {
+    if (!f.genres.has(g)) continue;
+    const w = index.genreWeight(g);
+    sharedGPlain += w;
+    sharedG += support.on ? w * step(GENRE_SUPPORT, support.genreCount.get(g) ?? 1) : w;
+    if (w > rarest) rarest = w;
+  }
+  const unionG = info.genreWeightSum + f.genreWeightSum - sharedGPlain;
+  const genreOf = (x: number) => (unionG > 0 ? (x / unionG) * (0.4 + 0.6 * rarest) : 0);
+  const genre = genreOf(sharedG);
+  const genrePlain = genreOf(sharedGPlain);
 
   let rel = 0;
   const itemRelated = item.related ?? [];
@@ -205,7 +285,8 @@ function similarityParts(info: ItemInfo, f: FavInfo, index: CatalogIndex): { sim
     }
   }
 
-  return { sim: clamp(W_KW * kw + W_GENRE * genre + W_RELATED * rel + W_FORMAT * format), kw, genre, rel, format, sharedKw };
+  const named = kwPlain + genrePlain >= NAME_MIN_EVIDENCE && (genrePlain > 0 || kwPlain >= NAME_KEYWORDS_ALONE);
+  return { sim: clamp(W_KW * kw + W_GENRE * genre + W_RELATED * rel + W_FORMAT * format), kw, genre, rel, format, named, sharedKw };
 }
 
 /** Development aid (used by dev/review.ts): why a title does or doesn't resemble each favourite. */
@@ -214,13 +295,18 @@ export function explainTaste(catalog: Catalog, favorites: readonly string[], ite
   const info = index.byId.get(itemId);
   if (!info) return [`${itemId} is not in the catalog`];
   const lines: { s: number; text: string }[] = [];
-  for (const id of new Set(favorites)) {
+  const favInfos = [...new Set(favorites)].flatMap((id) => {
     const core = index.refs.get(id);
-    if (!core || id === itemId) continue;
-    const p = similarityParts(info, favInfo(core, index), index);
-    lines.push({ s: p.sim, text: `${p.sim.toFixed(2)} ${core.title}: keywords ${p.kw.toFixed(2)} [${p.sharedKw.join(', ')}], genres ${p.genre.toFixed(2)}, related ${p.rel.toFixed(2)}, format ${p.format.toFixed(2)}` });
+    return core ? [favInfo(core, index)] : [];
+  });
+  const support = supportOf(favInfos);
+  for (const f of favInfos) {
+    if (f.core.id === itemId) continue;
+    const p = similarityParts(info, f, index, support, true);
+    lines.push({ s: p.sim, text: `${p.sim.toFixed(2)} ${f.core.title}${p.named ? '' : ' (not named)'}: keywords ${p.kw.toFixed(2)} [${p.sharedKw.join(', ')}], genres ${p.genre.toFixed(2)}, related ${p.rel.toFixed(2)}, format ${p.format.toFixed(2)}` });
   }
-  return lines.sort((a, b) => b.s - a.s).map((l) => l.text);
+  lines.sort((a, b) => b.s - a.s);
+  return [`format support x${formatSupport(info, support).toFixed(2)}`, ...lines.map((l) => l.text)];
 }
 
 // ---------------------------------------------------------------------------

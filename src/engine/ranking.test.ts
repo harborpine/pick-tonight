@@ -225,9 +225,33 @@ describe('taste', () => {
     expect(deck.find((c) => c.itemId === 'tv-10')!.reasons[0]).toMatch(/^Like Fav (One and Fav Two|Two and Fav One)$/);
     expect(deck.find((c) => c.itemId === 'tv-11')!.reasons[0]).toBe('Because you love Fav One');
   });
-  it('being on a favourite\'s "people also like" list is a strong signal even with nothing else in common', () => {
+  it('being on a favourite\'s "people also like" list lifts a title even with nothing else in common', () => {
     expect(rank(deck, 'tv-13')).toBeLessThan(rank(deck, 'tv-12'));
-    expect(deck.find((c) => c.itemId === 'tv-13')!.reasons[0]).toBe('Because you love Fav One');
+  });
+  it('...but that link alone is too noisy to SAY: the favourite is only named when something visible is shared', () => {
+    // tv-13 is on Fav One's "people also like" list but shares no theme and no genre with it.
+    const linkOnly = deck.find((c) => c.itemId === 'tv-13')!;
+    expect(linkOnly.reasons.join(' | ')).not.toMatch(/Fav One|Fav Two|Fav Three/);
+    // Add shared themes and genre to the very same link and the favourite is named.
+    const backed = title(14, { ...base, keywords: ['workplace comedy', 'hospital', 'zebra'] });
+    const fav1 = { ...fav, related: ['tv-13', 'tv-14'] };
+    const cat = madeUp([fav1, fav2, fav3, related, backed, likeNone, ...padding], { HG: [fav1, fav2, fav3], BG: [fav3] });
+    const d = engine.buildDeck(req({ who: 'HG', mood: 'laugh', novelty: 'new' }), makeCtx({ catalog: cat }), { limit: 100 });
+    expect(d.find((c) => c.itemId === 'tv-14')!.reasons[0]).toBe('Because you love Fav One');
+    expect(d.find((c) => c.itemId === 'tv-13')!.reasons.join(' | ')).not.toMatch(/Fav/);
+    // One loosely shared theme across different genres is not enough either
+    // (the real-catalog cases: Scream Queens <- Scrubs via "hospital", Black Mirror <- The Simpsons via "satire").
+    const loose = title(15, { ...base, genres: ['mystery'], keywords: ['hospital', 'slasher', 'college', 'mascot'] });
+    const fav1b = { ...fav, related: ['tv-15'] };
+    const cat2 = madeUp([fav1b, fav2, fav3, loose, likeNone, ...padding], { HG: [fav1b, fav2, fav3], BG: [fav3] });
+    const d2 = engine.buildDeck(req({ who: 'HG', mood: 'laugh', novelty: 'new' }), makeCtx({ catalog: cat2 }), { limit: 100 });
+    expect(d2.find((c) => c.itemId === 'tv-15')!.reasons.join(' | ')).not.toMatch(/Fav/);
+  });
+  it('Together reasons follow the same rule', () => {
+    const cat = madeUp([fav1WithRelated, fav2, fav3, related, likeBoth, ...padding], { HG: [fav1WithRelated, fav2], BG: [fav1WithRelated, fav3] });
+    const d = engine.buildDeck(req({ who: 'Together', mood: 'laugh', novelty: 'new' }), makeCtx({ catalog: cat }), { limit: 100 });
+    expect(d.find((c) => c.itemId === 'tv-13')!.reasons.join(' | ')).not.toMatch(/Fav/);
+    expect(d.find((c) => c.itemId === 'tv-10')!.reasons.join(' | ')).toMatch(/Fav One/);
   });
   it('favourites that are not in the catalog still shape taste (sample catalog: The Devil\'s Plan -> The Traitors)', () => {
     const d = engine.buildDeck(req({ who: 'HG', mood: 'gripped', time: 60, novelty: 'new' }), makeCtx(), { limit: 100 });
@@ -263,6 +287,91 @@ describe('taste', () => {
     // BG has an anime favourite, so anime competes on its merits for her.
     const bg = engine.buildDeck(req({ who: 'BG', mood: 'gripped' }), fresh);
     expect(rank(bg, 'tv-31')).toBe(0);
+  });
+});
+
+describe('resemblance cannot carry a badly rated or unproven title to the top', () => {
+  const favs = [1, 2, 3].map((k) => title(k, { title: `Dating Fav ${k}`, genres: ['reality'], keywords: ['dating show', 'villa', 'summer'], moods: { brainoff: 0.9 } }));
+  const clone = (id: number, over: Partial<CatalogItem>) => title(id, { genres: ['reality'], keywords: ['dating show', 'villa', 'summer'], moods: { brainoff: 0.9 }, ...over });
+  const good = clone(10, { rating: 7.6, votes: 900 });
+  const poor = clone(11, { rating: 5.2, votes: 900 }); // identical, but people who watched it didn't like it
+  const unproven = clone(12, { rating: 8.4, votes: 12 }); // identical, glowing rating from a dozen people
+  const halfMatch = title(13, { genres: ['reality'], keywords: ['dating show', 'cooking'], moods: { brainoff: 0.9 }, rating: 7.6, votes: 900 });
+  const noMatch = title(14, { genres: ['history'], keywords: ['archive'], moods: { brainoff: 0.9 }, rating: 7.6, votes: 900 });
+  const poorNoMatch = title(15, { genres: ['history'], keywords: ['archive'], moods: { brainoff: 0.9 }, rating: 5.2, votes: 900 });
+  const filler = Array.from({ length: 10 }, (_, k) => title(100 + k, { genres: ['music'], keywords: [`f${k}`], moods: { brainoff: 0.9 }, rating: 7.4, votes: 900 }));
+  const catalog = madeUp([...favs, poor, unproven, halfMatch, noMatch, poorNoMatch, good, ...filler], { HG: favs, BG: favs });
+  const ctx = makeCtx({ catalog });
+  const deck = engine.buildDeck(req({ who: 'BG', mood: 'brainoff', novelty: 'new' }), ctx, { limit: 100 });
+
+  it('of two equally close matches, the well-rated one wins clearly', () => {
+    expect(rank(deck, 'tv-10')).toBe(0);
+    expect(rank(deck, 'tv-11')).toBeGreaterThan(rank(deck, 'tv-10') + 1);
+  });
+  it('a perfect match with a poor rating ranks below a partial match with a good one', () => {
+    expect(rank(deck, 'tv-13')).toBeLessThan(rank(deck, 'tv-11'));
+  });
+  it('a glowing rating from a handful of voters is not trusted: the proven title ranks above it', () => {
+    expect(rank(deck, 'tv-10')).toBeLessThan(rank(deck, 'tv-12'));
+    const score = (id: string) => deck.find((c) => c.itemId === id)!.score;
+    expect(score('tv-12')).toBeLessThan(score('tv-10') - 0.05);
+  });
+  it('resemblance still counts between equals: of two poorly rated titles, the close match ranks higher', () => {
+    expect(rank(deck, 'tv-11')).toBeLessThan(rank(deck, 'tv-15'));
+  });
+  it("a person's own favourite is never marked down for its rating", () => {
+    const lowFav = title(1, { title: 'Guilty Pleasure', genres: ['reality'], keywords: ['dating show'], moods: { brainoff: 0.9 }, rating: 5.0, votes: 20, attention: 'low', dropIn: true });
+    const cat = madeUp([lowFav, good, ...filler], { HG: [], BG: [lowFav] });
+    const d = engine.buildDeck(req({ who: 'BG', mood: 'brainoff', novelty: 'rewatch' }), makeCtx({ catalog: cat }));
+    expect(d[0].itemId).toBe('tv-1');
+    expect(d[0].reasons[0]).toBe('One of your favourites');
+  });
+});
+
+describe('one favourite does not speak for the whole person', () => {
+  // Ten favourites: nine dramas about lawyers and scandals, and ONE animated sitcom.
+  const dramas = Array.from({ length: 9 }, (_, k) => title(k + 1, { title: `Drama Fav ${k + 1}`, genres: ['drama'], keywords: ['lawyer', 'scandal', `d${k}`], moods: { cozy: 0.8 } }));
+  const cartoonFav = title(20, { title: 'Cartoon Fav', genres: ['animation', 'comedy'], keywords: ['adult animation', 'cutaway gags', 'talking dog'], runtime: 22, dropIn: true, attention: 'low', moods: { cozy: 0.8 } });
+  const moreCartoons = [21, 22, 23].map((k) => title(k, { title: `Cartoon Fav ${k}`, genres: ['animation', 'comedy'], keywords: ['adult animation', 'cutaway gags', `c${k}`], runtime: 22, dropIn: true, attention: 'low', moods: { cozy: 0.8 } }));
+  // Candidates: a near-clone of the cartoon, and a drama that shares one theme with the dramas.
+  const cartoonClone = title(30, { genres: ['animation', 'comedy'], keywords: ['adult animation', 'cutaway gags', 'talking dog'], runtime: 22, dropIn: true, attention: 'low', moods: { cozy: 0.8 } });
+  const dramaLike = title(31, { genres: ['drama'], keywords: ['lawyer', 'scandal'], moods: { cozy: 0.8 } });
+  const filler = Array.from({ length: 10 }, (_, k) => title(100 + k, { genres: ['history'], keywords: [`f${k}`], moods: { cozy: 0.8 }, rating: 7.2 }));
+  const otherCartoon = title(32, { genres: ['animation', 'comedy'], keywords: ['space pirates', 'robot butler', 'moon base'], runtime: 22, dropIn: true, attention: 'low', moods: { cozy: 0.8 } });
+  const items = [...dramas, cartoonFav, ...moreCartoons, cartoonClone, otherCartoon, dramaLike, ...filler];
+  // "Mostly dramas" has one cartoon favourite; "cartoon fan" has four.
+  const catalog = madeUp(items, { BG: [...dramas, cartoonFav], HG: [cartoonFav, ...moreCartoons, ...dramas.slice(0, 2)] });
+  const ctx = makeCtx({ catalog });
+  const r = req({ mood: 'cozy', novelty: 'new' });
+
+  it('with one cartoon among ten favourites, a clone of that cartoon does not outrank what the other nine point to', () => {
+    const deck = engine.buildDeck({ ...r, who: 'BG' }, ctx, { limit: 100 });
+    expect(rank(deck, 'tv-31')).toBe(0);
+    expect(rank(deck, 'tv-31')).toBeLessThan(rank(deck, 'tv-30'));
+  });
+  it('for someone with four cartoon favourites the same clone comes first', () => {
+    const deck = engine.buildDeck({ ...r, who: 'HG' }, ctx, { limit: 100 });
+    expect(rank(deck, 'tv-30')).toBe(0);
+    expect(rank(deck, 'tv-30')).toBeLessThan(rank(deck, 'tv-31'));
+  });
+  it('the lone favourite still counts for something: its clone beats an otherwise identical cartoon with nothing in common', () => {
+    const deck = engine.buildDeck({ ...r, who: 'BG' }, ctx, { limit: 100 });
+    expect(rank(deck, 'tv-30')).toBeLessThan(rank(deck, 'tv-32'));
+  });
+  it('the same clone scores lower for the one-cartoon person than for the cartoon fan', () => {
+    const score = (who: 'HG' | 'BG') => engine.buildDeck({ ...r, who }, ctx, { limit: 100 }).find((c) => c.itemId === 'tv-30')!.score;
+    expect(score('BG')).toBeLessThan(score('HG') - 0.1);
+  });
+  it('on the real favourites: BG (one animated favourite of 22) gets less adult animation than HG (four of 14)', () => {
+    const real = makeCtx();
+    const animated = (who: 'HG' | 'BG') =>
+      engine
+        .buildDeck(req({ who, mood: 'laugh', viewing: 'background', time: 20, novelty: 'either' }), real, { limit: 6 })
+        .filter((c) => real.catalog.items.find((i) => i.id === c.itemId)!.genres.includes('animation')).length;
+    expect(animated('BG')).toBeLessThan(animated('HG'));
+    // Bob's Burgers (animated) vs Parks and Recreation (live-action sitcom): BG's sitcom favourites should win out.
+    const bg = engine.buildDeck(req({ who: 'BG', mood: 'laugh', viewing: 'background', time: 20, novelty: 'new' }), real, { limit: 100 });
+    expect(rank(bg, 'tv-8592')).toBeLessThan(rank(bg, 'tv-32726'));
   });
 });
 
