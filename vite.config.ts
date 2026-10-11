@@ -3,7 +3,7 @@ import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 import { APP_NAME, THEME_BACKGROUND } from './src/config.ts';
 
-const BASE = '/what-to-watch/';
+const BASE = '/pick-tonight/';
 
 /** Builds the home-screen manifest and page title from src/config.ts so the name lives in one place. */
 function appIdentity(): Plugin {

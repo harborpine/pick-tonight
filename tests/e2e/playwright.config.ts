@@ -37,7 +37,7 @@ export default defineConfig({
   webServer: {
     command: 'node tests/e2e/free-port.mjs && npm run build && npm run preview -- --port 4173 --strictPort',
     cwd: '../..',
-    url: 'http://localhost:4173/what-to-watch/',
+    url: 'http://localhost:4173/pick-tonight/',
     // A server left over from an earlier run serves a stale file list after any rebuild, so always start fresh.
     reuseExistingServer: false,
     timeout: 180_000,

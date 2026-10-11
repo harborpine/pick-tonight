@@ -20,7 +20,7 @@ import { rawAlts } from './parse';
 import { findSpinoffs, KnownTitles, knownFromIndex } from './spinoff';
 
 // Derived from the repo owner so an account rename can't break the previous-build lookup.
-const SITE = process.env.SITE_URL ?? `https://${process.env.GITHUB_REPOSITORY_OWNER ?? 'harborpine'}.github.io/what-to-watch`;
+const SITE = process.env.SITE_URL ?? `https://${process.env.GITHUB_REPOSITORY_OWNER ?? 'harborpine'}.github.io/pick-tonight`;
 const OUT_DIR = path.resolve('public/data');
 const CACHE_DIR = path.resolve('.cache/catalog');
 const TARGET = { perService: Number(process.env.PER_SERVICE ?? 620), cap: Number(process.env.CAP ?? 3400), minPerService: 380 };

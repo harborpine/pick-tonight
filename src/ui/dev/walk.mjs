@@ -5,7 +5,7 @@ import { mkdirSync } from 'node:fs';
 
 const out = process.argv[2] ?? 'shots';
 mkdirSync(out, { recursive: true });
-const URL = process.argv[3] ?? 'http://localhost:5173/what-to-watch/?catalog=fixture&sync=memory';
+const URL = process.argv[3] ?? 'http://localhost:5173/pick-tonight/?catalog=fixture&sync=memory';
 
 const browser = await chromium.launch();
 const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, hasTouch: true, isMobile: true });

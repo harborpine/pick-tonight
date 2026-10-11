@@ -3,7 +3,7 @@ import { chromium } from '@playwright/test';
 const browser = await chromium.launch();
 const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
 const page = await ctx.newPage();
-const U = 'http://localhost:4173/what-to-watch/?catalog=fixture&sync=memory';
+const U = 'http://localhost:4173/pick-tonight/?catalog=fixture&sync=memory';
 await page.goto(U);
 await page.getByTestId('setup').waitFor();
 await page.evaluate(() => navigator.serviceWorker.ready);

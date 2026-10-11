@@ -16,7 +16,7 @@ const IMAGES = `wtw-images-${VERSION}`;
 const KEEP = [PAGES, ASSETS, IMAGES];
 const MAX_IMAGES = 200;
 const NETWORK_TIMEOUT_MS = 4000;
-const SCOPE = new URL(self.registration.scope).pathname; // e.g. /what-to-watch/
+const SCOPE = new URL(self.registration.scope).pathname; // e.g. /pick-tonight/
 
 self.addEventListener('install', () => {
   self.skipWaiting();

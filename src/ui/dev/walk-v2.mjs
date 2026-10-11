@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const out = process.argv[2] ?? 'shots-v2';
-const base = process.argv[3] ?? 'http://localhost:5173/what-to-watch/';
+const base = process.argv[3] ?? 'http://localhost:5173/pick-tonight/';
 const width = Number(process.argv[4] ?? 390);
 mkdirSync(out, { recursive: true });
 const URL = `${base}?catalog=fixture&sync=memory`;

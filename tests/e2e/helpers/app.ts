@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { expect, type Browser, type BrowserContext, type Locator, type Page } from '@playwright/test';
 
-export const BASE = '/what-to-watch/';
+export const BASE = '/pick-tonight/';
 /** Single-device mode: everything stays in this browser context. */
 export const MEM_URL = `${BASE}?catalog=fixture&debug=1&sync=memory`;
 /** Real Firebase mode: needed whenever two phones talk to each other. */
