@@ -34,3 +34,19 @@ You are one teammate on a small agent team building the app described in [SPEC.m
 
 ## When you finish
 End with a short report: what you built, what you verified and how (commands + results), anything not done or uncertain, and any contract changes you need. Be honest about failures.
+
+## Version 2 (11 Oct 2026) — read before touching anything
+The app is LIVE and the owners are using it with real data. Seven changes are being added; the lead has already updated `src/contracts/` (see the commit "Contracts v2"). Summary:
+1. Time: `TimeBudget` gains `'any'` ("I don't care": no limit, no length preference).
+2. A solo right-swipe no longer navigates away; it adds a `PickEntry` (`SharedState.picks`, formerly `history`) and the deck carries on.
+3. New **Matches** tab = `picks` (solo right-swipes + Together matches). Picked titles are excluded from decks for the people concerned (`Engine.isPicked`).
+4. **History** tab = what a person has watched = `SharedState.seen`, whose values are now `SeenEntry` objects (was a number). Only "I watched this", manual add, the first-run grid, or an import write to it (`SyncApi.markWatched` / `unmarkWatched`, replacing `setSeen`). Right-swipes and matches never do.
+5. Watch-history import: `Engine.parseWatchHistory` / `matchWatchHistory` / `learnFromImport` / `searchTitles`, using the on-demand lookup `AppServices.loadTitleIndex()` (`public/data/titles.json`, type `TitleIndex`).
+6. Novelty `'either'` leans new: about 1 card in 10 is a rewatch (`EITHER_REWATCH_SHARE`), soft.
+7. Follow-ups: `Engine.followUps` from `CatalogItem.latestSeason` and `CatalogItem.spinoffOf`, shown at the top of the New tab with a dot.
+
+Rules for v2:
+- **Existing households must keep working with no data loss and no user action** (old `seen` numbers, old "history" log). The old app version stays live until the lead deploys, so anything deployed to Firebase meanwhile (rules) must work for BOTH the old and the new app.
+- Do not `git push` (a push to main deploys). The catalog teammate may still push its own paths.
+- Tests that asserted behaviour replaced by the seven changes must be rewritten to the new behaviour, and each one listed in your report with the reason. Nothing else may be weakened or removed.
+- The fixture (`src/contracts/fixtures/catalog.ts`) now has follow-up data, `FIXTURE_TITLE_INDEX` and `FIXTURE_NETFLIX_CSV`.
