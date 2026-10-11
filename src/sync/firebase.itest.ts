@@ -101,19 +101,6 @@ describe('pairing', () => {
     expect(b.profiles.BG.dealbreakers.horror).toBe(true);
   });
 
-  it('a code works exactly once', async () => {
-    const code = await A.createPairingCode();
-    const C = phone('C');
-    await C.init();
-    await C.joinWithCode(code, 'BG');
-    const D = phone('D');
-    await D.init();
-    await expect(D.joinWithCode(code, 'BG')).rejects.toThrow(/code/i);
-    expect(D.getDevice().status).toBe('unpaired');
-    await C.dispose();
-    await D.dispose();
-  });
-
   it('wrong code, malformed code, same person as the code maker are refused in plain language', async () => {
     const O = phone('O');
     await O.init();
@@ -150,19 +137,14 @@ describe('outsiders cannot touch the household', () => {
     // Claims the code but does not mark it used.
     await denied(updateDoc(hRef, { [`members.${uid}`]: { person: 'BG', at: 1 }, lastJoinCode: code }));
     // Marks the code used but claims a different household: the code belongs to ours.
-    const other = outsider2Household();
-    void other;
     // Tries to take other people's slot / change another member.
     const batch = writeBatch(db);
     batch.update(doc(db, PATHS.code(code)), { used: true, usedBy: uid });
     batch.update(hRef, { [`members.${uid}`]: { person: 'BG', at: 1 }, lastJoinCode: code, extra: 1 });
     await denied(batch.commit());
-    // The code is still unused and can be redeemed by the real second phone.
-    expect((await A.debug().db && true) as boolean).toBe(true);
-    const E = phone('E');
-    await E.init();
-    await E.joinWithCode(code, 'BG');
-    await E.dispose();
+    // The code is still unused (A can read it; nothing was redeemed).
+    const stillThere = await getDoc(doc(A.debug().db!, PATHS.code(code)));
+    expect(stillThere.data()?.used).toBe(false);
   });
 
   it('cannot create, list or tamper with pairing codes for our household', async () => {
@@ -196,9 +178,6 @@ describe('outsiders cannot touch the household', () => {
   });
 });
 
-function outsider2Household() {
-  return null;
-}
 async function getDocForMember(p: FirebaseSyncApi, id: string) {
   const { db } = p.debug();
   return (await getDoc(doc(db!, PATHS.household(id)))).data();
@@ -296,7 +275,20 @@ describe('Together sessions', () => {
   });
 });
 
-describe('unpair and re-pair', () => {
+describe('one-time codes, unpair and re-pair (these replace phone B, so they run last)', () => {
+  it('a code works exactly once', async () => {
+    const code = await A.createPairingCode();
+    const C = phone('C');
+    await C.init();
+    await C.joinWithCode(code, 'BG');
+    const D = phone('D');
+    await D.init();
+    await expect(D.joinWithCode(code, 'BG')).rejects.toThrow(/code/i);
+    expect(D.getDevice().status).toBe('unpaired');
+    await C.dispose();
+    await D.dispose();
+  });
+
   it('a phone that unpairs loses access; a fresh code brings it back', async () => {
     await B.unpair();
     expect(B.getDevice().status).toBe('unpaired');

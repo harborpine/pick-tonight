@@ -141,11 +141,31 @@ const MOOD_REASONS: Record<MoodId, string> = {
 /**
  * raw  = the catalog's fit for the requested mood (used for the keep/drop gates);
  * near = raw, or partial credit from a neighbouring mood (also a gate);
- * eff  = what scoring uses: `near` on a curve that flattens toward the top.
- * Mood tags are estimates, so the gap between "fits" (0.7) and "fits
- * perfectly" (1.0) is deliberately small, while the gap between "barely"
- * (0.3) and "fits" stays large. 0.3 -> 0.43, 0.5 -> 0.67, 0.7 -> 0.85, 0.9 -> 0.97.
+ * eff  = what scoring uses: `near` on a curve that flattens toward the top
+ *        (see MOOD_CURVE). Mood tags are estimates, so the gap between "fits"
+ *        (0.7) and "fits perfectly" (1.0) is deliberately small, while the gap
+ *        between "barely" (0.3) and "fits" stays large.
  */
+/** [catalog mood fit, value used for scoring], joined by straight lines. */
+const MOOD_CURVE: [number, number][] = [
+  [0, 0],
+  [0.3, 0.25],
+  [0.5, 0.55],
+  [0.7, 0.85],
+  [0.85, 0.95],
+  [1, 1],
+];
+function moodCurve(x: number): number {
+  for (let k = 1; k < MOOD_CURVE.length; k++) {
+    const [x1, y1] = MOOD_CURVE[k];
+    if (x <= x1) {
+      const [x0, y0] = MOOD_CURVE[k - 1];
+      return y0 + ((x - x0) / (x1 - x0)) * (y1 - y0);
+    }
+  }
+  return 1;
+}
+
 function moodFit(item: CatalogItem, mood: MoodId): { raw: number; near: number; eff: number } {
   const raw = clamp(item.moods?.[mood] ?? 0);
   let best = 0;
@@ -155,7 +175,7 @@ function moodFit(item: CatalogItem, mood: MoodId): { raw: number; near: number; 
     if (v > best) best = v;
   }
   const near = Math.max(raw, NEIGHBOUR_CREDIT * clamp(best));
-  return { raw, near, eff: 1 - Math.pow(1 - near, 1.6) };
+  return { raw, near, eff: moodCurve(near) };
 }
 
 /**

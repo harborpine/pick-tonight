@@ -31,7 +31,7 @@ export const LEARN_RATE: Record<SwipeAction, number> = {
   never: -0.22,
 };
 /** Every swipe multiplies existing weights by this (slow forgetting). */
-const DECAY = 0.992;
+const DECAY = 0.998;
 const KEYWORD_SHARE = 0.8;
 const TRAIT_SHARE = 0.6;
 /** Only a title's most relevant keywords are learned from. */

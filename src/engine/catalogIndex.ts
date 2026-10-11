@@ -147,20 +147,21 @@ function build(catalog: Catalog): CatalogIndex {
   const meanRating = rated ? ratingSum / rated : 7;
 
   // Popularity as a rank, so one runaway hit doesn't flatten everything else.
-  const byPop = catalog.items.map((i, k) => ({ k, p: i.popularity ?? 0, id: i.id }));
-  byPop.sort((a, b) => a.p - b.p || (a.id < b.id ? -1 : 1));
   const popRank = new Float32Array(catalog.items.length);
-  byPop.forEach((e, rank) => {
-    popRank[e.k] = byPop.length > 1 ? rank / (byPop.length - 1) : 0.5;
-  });
-  // Vote counts ranked within movies and within series separately (films collect far more votes).
   const voteRank = new Float32Array(catalog.items.length);
+  /** Writes each entry's rank share (0 = lowest, 1 = highest; equal values get equal shares) into `into`. */
+  const rankInto = (entries: { k: number; v: number }[], into: Float32Array) => {
+    entries.sort((a, b) => a.v - b.v);
+    let below = 0;
+    for (let i = 0; i < entries.length; i++) {
+      if (i > 0 && entries[i].v !== entries[i - 1].v) below = i;
+      into[entries[i].k] = entries.length > 1 ? below / (entries.length - 1) : 0.5;
+    }
+  };
+  rankInto(catalog.items.map((i, k) => ({ k, v: i.popularity ?? 0 })), popRank);
+  // Vote counts ranked within movies and within series separately (films collect far more votes).
   for (const kind of ['movie', 'tv'] as const) {
-    const group = catalog.items.map((i, k) => ({ k, v: i.votes ?? 0, id: i.id, kind: i.kind })).filter((e) => e.kind === kind);
-    group.sort((a, b) => a.v - b.v || (a.id < b.id ? -1 : 1));
-    group.forEach((e, rank) => {
-      voteRank[e.k] = group.length > 1 ? rank / (group.length - 1) : 0.5;
-    });
+    rankInto(catalog.items.map((i, k) => ({ k, v: i.votes ?? 0, kind: i.kind })).filter((e) => e.kind === kind), voteRank);
   }
 
   const infos: ItemInfo[] = catalog.items.map((item, k) => {
