@@ -1,76 +1,14 @@
-# Progress
+# Progress — Pick Tonight (public version)
 
-## Step 1: one-time setup — COMPLETE (10 Oct 2026)
+## Setup — done 11 Oct 2026
+- Copied from the private app at its state after tag `private-v2` (commit 2a7f019). Folder `C:\claudecodeprojects\pick-tonight`.
+- GitHub repo `harborpine/pick-tonight` (public), Pages on (source = Actions): https://harborpine.github.io/pick-tonight/
+- Firebase project `pick-tonight-5tkr8` created by CLI; web app registered (`firebase.web-config.json`); Firestore `(default)` in nam5; rules deployed (still the private app's rules — sync teammate replaces them).
+- OWNER STILL TO DO (asked 11 Oct): enable Anonymous sign-in in the Firebase console; add the `TMDB_TOKEN` secret to the new repo.
+- TMDB terms checked: free non-commercial use with attribution is permitted (logo + notice + JustWatch credit; no caching beyond 6 months).
+- Private-app baseline for the "unchanged" proof: repo HEAD 2a7f019d22bf4e0b7ac2d8da7c56bf1482c875f1, working tree clean; firestore.rules sha256 starts b6f2eaa839954112; live index.html sha256 starts 7b5ea25c7e10a928.
 
-Nothing has been built yet. The build starts when the owner issues a /goal.
-
-### Tools on this PC
-- Node.js 24 LTS at `C:\Program Files\nodejs` and GitHub CLI at `C:\Program Files\GitHub CLI`, both installed via winget. Shells started before the install may not have them on PATH; add those folders explicitly.
-- `gh` is signed in as `harborpine` (renamed from `harrisonglantz` on 11 Oct 2026) (scopes: repo, workflow). Firebase CLI (`npx firebase-tools`) is signed in as the owner's Google account.
-- firebase-tools switches to a non-interactive "paste a code" login when it sees agent environment variables (CLAUDE*, AI_AGENT). If login is ever needed again, open a normal console window with those cleared.
-
-### GitHub — proven
-- Repo: https://github.com/harborpine/what-to-watch (public; required for free Pages). Branch `main`.
-- Pages enabled with source = GitHub Actions. URL: https://harborpine.github.io/what-to-watch/ (so the Vite base path is `/what-to-watch/`).
-- Local git identity uses the GitHub noreply address so the owner's email is not in public commits.
-- Secret `TMDB_TOKEN` (TMDB v4 read access token) is set. It is not on this PC; anything touching TMDB must run in Actions.
-
-### TMDB — proven
-`.github/workflows/tmdb-check.yml` (manual run) succeeded. US provider IDs for the owner's exact plans:
-
-| Plan | TMDB provider | ID | Ads |
-|---|---|---|---|
-| Netflix (ad-free) | Netflix | 8 | no |
-| Disney+ (ad-free) | Disney Plus | 337 | no |
-| Hulu (with ads) | Hulu | 15 | yes |
-| HBO Max (with ads) | HBO Max | 1899 | yes |
-| Peacock Premium | Peacock Premium | 386 | yes |
-| Paramount+ Essential | Paramount Plus Essential | 2616 | yes |
-
-Must NOT be treated as ours: Netflix Standard with Ads (1796), Netflix Kids (175), Peacock Premium Plus (387), Paramount Plus Premium (2303), DisneyNOW (508), and every Amazon / Apple TV / Roku channel variant.
-
-Known limitation: TMDB has a single entry each for Hulu and HBO Max (no ad vs ad-free split), so a title locked to a higher tier of those two cannot be detected from provider data alone.
-
-### Firebase — proven
-- Project `what-to-watch-90a38`, Spark (free) plan. Web config in `firebase.web-config.json` (not a secret).
-- Firestore `(default)` database in `nam5`. Anonymous sign-in enabled.
-- `firestore.rules` is a setup placeholder (any signed-in install can read/write). The sync teammate must replace it with pairing-code rules limited to the two phones, and deploy with `npx firebase-tools deploy --only firestore:rules`.
-- Test passed: anonymous sign-in, write, read back, unauthenticated read refused; test document and test user deleted.
-- Free limits checked 10 Oct 2026: 1 GiB stored, 50k reads/day, 20k writes/day, 20k deletes/day, one free database per project. Ample for two phones.
-
-### Not yet committed
-`.firebaserc`, `firebase.json`, `firestore.rules`, `firebase.web-config.json`, `PROGRESS.md` exist locally only. The first commit (spec, CLAUDE.md, .gitignore, tmdb-check workflow) is pushed.
-
-## Step 2: the build — COMPLETE, see below (started 10 Oct 2026)
-
-Goal (owner's /goal): app fully built by the agent team and deployed; see SPEC.md "Definition of done".
-
-### Done by the lead
-- Scaffold (Vite + React + TS, Vitest, Playwright installed with chromium + webkit), `src/contracts/` (catalog, state, engine, sync, app), fixture catalog (55 titles) at `src/contracts/fixtures/catalog.ts`, `TEAM.md`, placeholder engine / memory sync / UI so the app runs: `npm run dev` then http://localhost:5173/what-to-watch/?catalog=fixture&sync=memory
-- Working name `Tonight` in `src/config.ts`. Time limits: 20→25 min, 45→50, 60→65, 2+ hrs→no limit (`TIME_LIMIT_MINUTES`).
-- Decision: e2e tests use the fixture catalog + the REAL Firebase project (no Java, so no emulator), each run pairing a fresh household.
-
-### Teammates — all finished (11 Oct 2026)
-| Name | Model | Owns | Status |
-|---|---|---|---|
-| catalog | Sonnet | scripts/catalog, .github/workflows, public/data | done: daily workflow green, 2,662 titles, all six services |
-| engine | Opus | src/engine | done: rules + ranking + learning, tuned twice on the real catalog |
-| sync | Sonnet | src/sync, firebase files | done: secure rules deployed, 17 live integration checks (npm run test:sync) |
-| ui | Sonnet | src/ui, public/ (not data) | done: all screens, icons, service worker |
-| qa | Sonnet | tests/e2e | done: 49 Playwright tests at iPhone 14 / WebKit |
-
-### State at hand-over
-- Local: npm run build OK, npm test 228/228, npm run e2e 49/49 (run e2e alone: a concurrent build or second e2e run corrupts it).
-- Known limits are listed in INSTALL.md (pairing loss on both phones) and in the lead's final report: Hulu/HBO Max tier blind spot, rule-based mood/attention tags, New feed seeded from release dates on day one, 60-day schedule keep-alive unproven, not tested on a physical iPhone.
-- Tuning knobs: named constants at the top of src/engine/rank.ts, taste.ts, catalogIndex.ts; catalog overrides in scripts/catalog/overrides.ts.
-
-## Version 2 — COMPLETE and live (11 Oct 2026)
-Owner's seven changes: time "I don't care"; solo right-swipe stays on the deck; Matches tab (`picks`); History tab = watched only (`seen` as `SeenEntry`); watch-history import (+ `public/data/titles.json` lookup, 13,751 titles); "Either" leans new (~1 in 10 rewatch); follow-ups (new seasons + spinoffs) at the top of New with a dot.
-
-- Contracts changed in commit 810433a; TEAM.md has a "Version 2" section. Teammates this round: catalog2, engine2, sync2, ui2, qa2 (the v1 teammates were not restorable after the session pause).
-- Storage is backward compatible: the legacy numeric seen map and month "history" docs are still written; new details live in `households/{hid}/seenx` (see src/sync/README.md). `firestore.rules` unchanged. Ceiling: ~19,500 watched titles per person.
-- Verified before deploy: build OK; npm test 367/367; npm run test:sync 20/20; e2e 82 tests (run with `E2E_WORKERS=2`; two-phone Firebase tests can flake under 4 workers). `tests/e2e/specs/upgrade.spec.ts` proved a household created on the live v1 site survives being joined by the v2 build; it self-skips now that the live site is v2.
-- Deployed by run 38173630609 (commit fc3a608). Live smoke test passed (new files 200, time 'any', follow-ups, sample Netflix import).
-- Account renamed during v1: GitHub user is `harborpine`; site https://harborpine.github.io/what-to-watch/. Repo must stay PUBLIC or Pages turns off.
-- Known limits: only Netflix's per-profile export format is verified; same-named titles resolve by popularity; spinoff links are curated/pattern-based (42); a new-season follow-up card says "Start the series"; rewatch slots favour the same top favourites until more history exists.
-- Not started: the generic/public version (owner asked to hold). Concept notes are in the conversation only.
+## Build — in progress
+- Lead: contracts rewritten for the public version ("Contracts v3"), app wiring (per-service catalog store, invite link handling), SPEC.md, TEAM.md.
+- Working name `Pick Tonight` in `src/config.ts`.
+- Teammates (not restorable after an interruption; respawn from TEAM.md + SPEC.md): catalog, engine, sync, ui, then qa.

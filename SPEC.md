@@ -1,91 +1,80 @@
-# SPEC
+# Pick Tonight — spec (public version)
 
-I want you to build a personal web app for me (HG) and my girlfriend (BG) that helps us decide what to watch. This message is the full spec. For now, do only "Step 1" at the bottom, then stop. I'll start the build with a /goal afterward.
+A free, public web app that helps a household decide what to watch. It is a passion project: no ads, no fees, no revenue, no accounts. It grew out of a private app built for one couple; this version must work for **anyone**, with nothing about any particular person built in.
 
 ## What it is
-We each open the app on our own iPhone (installed to the home screen from Safari), say who's watching and what we're in the mood for, and swipe through suggestions that are actually on the streaming services we pay for. It's only for the two of us, it must cost nothing to run, and I'm not a developer, so it has to keep working without me maintaining it.
+Each person opens the app on their own iPhone (installed to the home screen from Safari), says who's watching and what they're in the mood for, and swipes through suggestions that are actually on the streaming services the household pays for. It costs nothing to run and must keep working with no maintenance.
 
-## Our services (US)
-- Netflix: ad-free
-- Disney+: ad-free
-- Hulu: with ads
-- HBO Max: with ads
-- Peacock Premium (the ad tier, not Premium Plus)
-- Paramount+ Essential (the ad tier, not the Showtime tier)
-Only suggest titles included with these exact plans: no rentals, purchases, add-ons, or higher tiers. When a title is on more than one of our services, send us to an ad-free one. Services and tiers must be editable in settings in case we change plans.
+## Households
+- A household has **1 to 4 members**. Each member has their own phone, name, profile and taste.
+- **No sign-in.** A phone is a member because it holds the household's saved pairing.
+- The first person creates the household. Others join by **invite link** (`<site>?join=CODE`), with the bare 6-character code as a fallback. An invite works once and lasts 24 hours.
+- Someone with a new phone (or whose phone forgot the pairing) rejoins with an invite and picks **"I'm already a member"** to take over their existing profile.
+- The app must say plainly that, with no sign-in, a person using it **alone** who loses their phone loses their lists (nobody is left to invite them back).
+- Households are completely isolated from each other.
+
+## First-run setup (per person; every step after the name is skippable)
+1. If opened in an ordinary browser tab rather than from the home screen: explain "Add to Home Screen" first (with "continue in the browser anyway"), because on iPhone a browser tab and the installed app do not share data.
+2. Your name.
+3. *(First person only)* The household's streaming services and plan for each (ad tier / ad-free), US. Editable later in settings by anyone.
+4. A few favourites, found by search (any title, whether or not it's on the household's services).
+5. "Never show me…": horror, true crime, anything scary, whole genres (e.g. reality, animation, documentary), anything not originally in English.
+6. Optional: import a watch history (Netflix's per-profile file, other exports, or a pasted list). Offered as the fast way to teach the app.
+7. A poster grid of popular titles on the household's services to tick off as seen.
 
 ## Asking for a suggestion
-A quick tap-through with sensible defaults, so it takes a few seconds:
-1. Who: HG, BG, or Together
+A quick tap-through with sensible defaults:
+1. Who's watching: any non-empty set of household members (default: me). A solo household never sees this choice.
 2. Viewing type: Focused, Background, While eating
 3. Mood: Want to laugh / Cozy, comfort / Tired, brain off / Want to be gripped / Feel-good, uplifting / Want to think or learn / Romantic / Scared, spooky / Sad, want a good cry / Hyped, action
-4. Time available (about 20 min, 45 min, 1 hr, 2+ hrs)
-5. New, rewatch, or either
+4. Time: about 20 min, 45 min, 1 hr, 2+ hrs, I don't care
+5. New, rewatch, or either (either = mostly new, about 1 in 10 a rewatch)
 6. Optional genre craving
 
-Viewing type is about attention, not taste. Every title needs an attention level. Example: Game of Thrones is complicated, so it's Focused only. Family Guy is funny and easy to follow, so it's fine for any viewing type. Treat While eating like Background: easy to follow while looking away.
+Viewing type is about attention, not taste. Background and While eating mean "easy to follow while looking away".
 
 ## Suggestions
-One card at a time, swiped. Each card shows the poster, title, year, length, which service to use (marked ad-free or ads), and exactly what to watch, one of: the movie / start the series / put on any episode (drop-in shows like sitcoms, reality, baking) / a specific standout episode by season, number, and name when one stands out and works on its own.
-Card actions: swipe right = yes, swipe left = not tonight (can come back another day), plus buttons for Seen it, Save to watchlist, and Never.
+One card at a time, swiped. Each card shows poster, title, year, length, which service to use (marked ad-free or ads), and exactly what to watch: the movie / start the series / put on any episode / a specific standout episode / the new season.
+Swipe right = yes, left = not tonight (can come back another day), plus Seen it, Save to a watchlist, and Never.
+- **Alone:** a right-swipe never leaves the deck. It adds the title to the Matches tab and a "Liked" counter ticks up.
+- **Together** (2+ watching): one person starts a session; the others who are watching get a prompt to join whenever the app is open. Everyone swipes the same deck on their own phone. When **everyone watching** has said yes to the same title, every phone shows a match screen with where to watch it. They can keep swiping for more.
 
-## Together mode
-One of us starts a session and picks the inputs; the other phone shows a prompt to join when the app is open. We each swipe the same deck on our own phone. When we've both said yes to the same title, both phones show a match screen with where to watch it. We can keep swiping for more matches.
+## Tabs
+- **Tonight** — ask and swipe.
+- **New** — "Because you watched…" (new seasons and spinoffs of things the viewer has watched) on top, then recent arrivals on the household's services, ranked by taste. A dot shows when there's a follow-up not yet seen.
+- **Watchlist** — each member's own list and a shared "Ours".
+- **Matches** — every solo right-swipe and every Together match, with where to watch, "I watched this" / "We watched this", and Remove. Titles here are left out of new decks for the people concerned.
+- **History** — only what a person has actually watched (marked by hand, ticked in the first-run grid, or imported). Add by search; remove with undo.
+- **Us** — a page per member (favourites, never-show-me, what the app has learned in plain language with more/less corrections, import), and Settings.
 
-## Profiles
-Two profiles, HG and BG, seeded with the lists below. Favorites count as seen and as strong taste signals even if they aren't on our services.
-- HG favorites: Scrubs, How I Met Your Mother, The Hateful Eight, Forrest Gump, Family Guy, The Simpsons, Curb Your Enthusiasm, Grey's Anatomy, The Hunger Games, South Park, Disenchantment, The Devil's Plan, Summer House, Game of Thrones. No dealbreakers.
-- BG favorites: Scandal, Grey's Anatomy, The Great British Baking Show, Survivor, The Traitors, Community, How to Get Away with Murder, Family Guy, Summer House, Love Island, The Devil's Plan, Squid Game, How I Met Your Mother, Friends, Crazy Ex-Girlfriend, Killing Eve, Why Women Kill, Paradise, Shameless, Gossip Girl, Gilmore Girls, You. She doesn't watch horror or true crime. Thrillers are fine as long as they aren't scary.
-First-run setup for each of us: a poster grid of popular titles to tick off as seen.
-The app learns from swipes, gradually shifting each person's taste weights, and has a page per profile showing what it has learned in plain language, where we can correct it.
+## Settings
+Services and plans; invite someone (link + code; hidden when the household is full); rename yourself; remove a member; unpair this phone; **Delete everything** (permanently deletes the whole household for everyone, after a clear confirmation); Privacy; About.
 
-## What it tracks
-- Seen (per person), marked as we go
-- Watchlist, saved as mine, hers, or ours
-- Never: hides the title for the person who tapped it and from Together decks. Once we've both tapped Never, it's gone everywhere for good.
-- History: a log of every match and every solo pick so we can find it again
-No star ratings and no episode-progress tracking.
-
-## New on our services
-A feed of shows, seasons, and movies that recently arrived on our six services, ranked by our tastes, with the same card actions.
-
-## Rules that must hold (write tests for each)
-1. Nothing is ever suggested that isn't included in our plans.
-2. BG alone or Together: no horror, no true crime, nothing scary. The Scared/spooky mood is only offered when HG is watching alone.
-3. Background and While eating never return high-attention titles. Low-attention titles are eligible for every viewing type.
+## Rules that must hold (tests for each, for households of 1, 2, 3 and 4 and any audience)
+1. Nothing is ever suggested that isn't included in the household's selected plans.
+2. Any watcher's "never show me" choices exclude a title for the whole audience. The Scared/spooky mood is offered only when no watcher has a horror or scary choice.
+3. Background and While eating never return medium- or high-attention titles. Low-attention titles are eligible for every viewing type.
 4. Nothing longer than the time available (episode length for shows, runtime for movies).
-5. New excludes anything a watcher has seen (Together: either of us). Rewatch only includes seen titles (Together: at least one of us).
-6. When a title is on several of our services, an ad-free one is shown.
-7. Never behaves as described above.
+5. New excludes anything any watcher has seen. Rewatch only includes titles at least one watcher has seen. Either leans new.
+6. When a title is on several of the household's services, an ad-free one is shown.
+7. Never hides a title for any audience containing a person who tapped it; once every member of the household has tapped Never, it is gone everywhere.
+8. A title sitting in Matches is left out of decks for any audience that overlaps the pick's people.
+9. A Together match requires a yes from every member of the session's audience, and is recorded exactly once.
 
 ## How picks are made
-No paid AI or APIs. Rank a real catalog against the request using rule-based scoring: similarity to each person's favorites and learned weights (genres, keywords, related titles), mood-to-content mapping, attention level, length, and quality signals. Recommendation quality is the whole point of the app, so spend the effort here: after it works, review the top results for a spread of realistic requests from both profiles and tune until they look like things we'd say yes to.
+No paid AI or APIs. Rule-based scoring of the catalog against the request: similarity to each watcher's favourites and learned weights, mood fit, attention, length, quality. For 2+ watchers the pick must suit everyone (least-misery blend). **Cold start matters:** a brand-new person with no favourites and no history must still get sensible, quality-led, varied picks that respect mood and viewing type, improving as they add favourites, import history and swipe.
 
-## Technical decisions (defaults; change one only for a clear reason, and tell me)
-- Installable web app (PWA) for iPhone Safari: portrait, touch swipes, safe areas. Vite + React + TypeScript, hosted free on GitHub Pages from my GitHub account.
-- Catalog from the TMDB API, which is free for personal use; its where-to-watch data comes from JustWatch, so credit both on an About screen. The TMDB token must never be in the repo or on our phones: store it as a GitHub Actions secret, and have a daily workflow rebuild a static catalog of titles on our plans with every tag the scoring needs (attention level, mood tags, drop-in flag, standout episodes), then redeploy. The difference between builds powers the New feed. TMDB lists ad tiers and premium tiers as separate providers, so map our exact plans carefully. Keep the catalog big enough for variety and small enough to load fast on a phone.
-- Shared live data (profiles, seen, watchlist, never, sessions, history) in Firebase on the free plan, Firestore with anonymous sign-in and a one-time pairing code so only our two phones can read or write. Check the current free limits first and choose another free realtime option if it no longer fits. Scoring runs on the phone, so there's no server.
-- Dark cinema look: dark background, big poster art, one bold accent color, a satisfying match moment.
-- Pick a short working name and keep it in one config value so I can rename it.
+## Privacy and fair use
+- Stored per household: member names (whatever they typed), chosen services, favourites, watched/never/watchlist/matches lists, learned taste. No email, no location, no contacts, no analytics, no tracking, no ads.
+- Anyone in a household can delete everything. A Privacy page says all this in plain language.
+- Guard rails so strangers can't harm the service or each other: strict household isolation, at most 4 members, size limits on everything stored, and a plain message if the free database quota is exhausted ("busy right now, try again tomorrow") rather than a broken app.
 
-## Agent team
-Use an agent team for the build. You are the lead. Before spawning anyone, scaffold the project and write src/contracts/ (shared types for catalog items, profiles, requests, the engine API, and the sync API) plus a small fixture catalog, so teammates can work in parallel without waiting on each other. Only you edit the contracts; teammates message you for changes. You own src/contracts/, src/app/ (wiring it together), root config, and docs. Give each teammate the relevant parts of SPEC.md in its spawn prompt, since they don't see this conversation.
-- catalog (Sonnet): owns scripts/catalog/, .github/workflows/, public/data/. TMDB fetching, plan mapping, tagging, standout episodes, new-arrivals diff.
-- engine (Opus): owns src/engine/ and its tests. Scoring, deck building, learning from swipes, the seven rules.
-- sync (Sonnet): owns src/sync/ and the Firebase config and rules files. Pairing, live Together sessions, match detection, all shared data.
-- ui (Sonnet): owns src/ui/ and the rest of public/. Screens, swipe deck, look and feel, PWA manifest and service worker.
-After you integrate their work, spawn qa (Sonnet), owning tests/e2e/: it plays through the app at iPhone screen size using two browser contexts as HG and BG, and reports bugs to the owning teammate.
-Keep PROGRESS.md current. Teammates aren't restored if the session is interrupted, so on resume, read it and respawn whoever is needed.
+## Technical decisions
+- Installable web app (PWA) for iPhone Safari; Vite + React + TypeScript; hosted free on GitHub Pages at https://harborpine.github.io/pick-tonight/ (base path `/pick-tonight/`).
+- Catalog from the TMDB API (free for non-commercial use with attribution). The TMDB token exists only as the GitHub Actions secret `TMDB_TOKEN`. A daily workflow rebuilds a static catalog — **one file per streaming service** so a phone downloads only its household's services — plus the New feed and a broad title lookup, then redeploys. Covers every major US subscription service with correct plan/tier mapping.
+- TMDB terms (checked 11 Oct 2026): non-commercial use only; the TMDB logo and the notice "This product uses the TMDB API but is not endorsed or certified by TMDB." in About; JustWatch credited for where-to-watch data; nothing cached longer than 6 months (the daily rebuild satisfies this).
+- Shared live data in Firebase (free Spark plan): Firestore + anonymous sign-in, project `pick-tonight-5tkr8`. No server code. Scoring runs on the phone.
+- Dark cinema look, one bold accent colour, a satisfying match moment. The app name lives only in `src/config.ts`.
 
-## Definition of done
-- All seven rules have passing tests; build and tests are clean
-- End-to-end tests pass at iPhone size, including a two-phone Together match that lands in history
-- The daily catalog workflow has run on GitHub and the live catalog has titles from all six services
-- The app is live on GitHub Pages
-- INSTALL.md explains, in plain steps, how to add it to both iPhones and pair them
-
-## Step 1 (do this now, then stop)
-1. Create the project folder, save this spec as SPEC.md, and write a short CLAUDE.md pointing to it.
-2. Walk me through the one-time setup one step at a time, in plain language with exact clicks: a free TMDB account and API read token, the Firebase project and its web config, and a GitHub repo with Pages enabled and the TMDB token added as a secret. Do everything you can yourself and only ask me for things that need my login.
-3. Prove each one works: a test TMDB call that prints the US provider names matching our six plans, a test Firestore write and read, and a test push to GitHub.
-4. Tell me setup is complete. Don't start building.
+## Not in scope
+Sign-in, App Store packaging, notifications, countries other than the US, households larger than four, monetisation.

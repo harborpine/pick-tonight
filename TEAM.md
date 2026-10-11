@@ -1,6 +1,20 @@
 # Team rules (read this first)
 
-You are one teammate on a small agent team building the app described in [SPEC.md](SPEC.md). The lead coordinates. The owner is a non-developer; the app must keep working with no maintenance.
+You are one teammate on a small agent team building **Pick Tonight**, the public version of an app described in [SPEC.md](SPEC.md). The lead coordinates. The owner is a non-developer; the app must keep working with no maintenance.
+
+## Where this code came from — important
+This repository started as a copy of a **private app built for one couple** ("HG" and "BG"), which is live and must never be touched. The copy works and has ~370 passing tests, but it has that couple baked in: exactly two people with fixed ids, their favourites seeded from the catalog, their six streaming plans as defaults, pairing between exactly two phones. Your job is to generalise your area to SPEC.md, keeping what is good (the tuned ranking, the tested rules, the sync design, the look and feel) rather than rewriting from scratch.
+
+The lead has already rewritten `src/contracts/` for the public version (commit "Contracts v3"). Start by reading `git show HEAD --stat` and the contracts themselves. Headline changes:
+- `MemberId` (opaque string) replaces the fixed `'HG' | 'BG'`; `SharedState.members` holds 1–4 `Member`s with names. `Who` is now a **sorted array of member ids** (the audience), not `'Together'`.
+- Profiles start empty (`Engine.emptyProfile()`); favourites are `FavoriteTitle[]` carrying their own genres/keywords (picked by search; may be off-catalog). `Catalog.tasteRefs`, `Catalog.seedFavorites`, `SEED_FAVORITE_TITLES`, `DEFAULT_PLANS` are gone.
+- `Dealbreakers` gains `genres: GenreId[]` and `subtitled: boolean`; `CatalogItem` gains `lang`.
+- Services are data: `ServiceId` is a string, `PlanSelection` is partial, `SERVICES` is being widened to every major US service. Never assume the original six.
+- The catalog is published as one file per service (`CatalogManifest`); the UI gets a `CatalogStore` (`AppServices.catalogs`) instead of a fixed catalog.
+- `SyncApi`: `createHousehold(name, profile, settings)`, `createInvite`, `previewInvite`, `joinWithCode(code, JoinAs)`, `renameMember`, `removeMember`, `unpair`, `deleteHousehold`; sessions have an audience and match when everyone in it says yes.
+- The fixture now has a sample household (`FIXTURE_MEMBERS` alex / sam / kit, `FIXTURE_FAVORITES`, `FIXTURE_PLANS`) instead of built-in favourites.
+
+**Never** reference the private app's Firebase project (`what-to-watch-90a38`), its site (`harborpine.github.io/what-to-watch`), or its repo from code or tests. Remove any names, initials or personal favourites lists you find in your area (use the fixture's sample people in tests).
 
 ## Ownership — edit ONLY your own paths
 | Who | Owns |
@@ -12,41 +26,21 @@ You are one teammate on a small agent team building the app described in [SPEC.m
 | ui | `src/ui/`, everything in `public/` except `public/data/` |
 | qa | `tests/e2e/` |
 
-- **Never edit `src/contracts/`.** It is the agreed interface. If it is wrong or missing something, tell the lead exactly what to change and why (in your final report, or by message if you can), and keep working around it meanwhile.
-- Need a new npm dependency or a root-config change? Ask the lead; do not edit `package.json`. Prefer no new dependencies.
-- Other teammates are editing the same folder tree at the same time. Never revert, reformat or "fix" files outside your paths. If someone else's code breaks `npm run build`, report it; don't patch it.
-- **Do not `git commit` or `git push`** (the lead does), with one exception: the catalog teammate may commit and push *only its own paths* to run workflows on GitHub.
+- **Never edit `src/contracts/`.** If it is wrong or missing something, tell the lead exactly what to change and why, and keep working around it meanwhile.
+- Need a new npm dependency or a root-config change? Ask the lead. Prefer none.
+- Other teammates are editing the same folder tree at the same time. Never revert, reformat or "fix" files outside your paths. The whole-project build and test run will be red for a while for reasons that are not yours — run your own area's checks (`npx tsc --noEmit` filtered to your paths, `npx vitest run <your folder>`).
+- **Do not `git commit` or `git push`** (the lead does), with one exception: the catalog teammate may commit and push *only its own paths* to run workflows on GitHub (`git add scripts/catalog .github/workflows public/data/.gitignore`, never `git add -A`; `git pull --rebase` if rejected).
+- **Never weaken, skip or delete a test to make it pass.** Tests that assert behaviour SPEC.md deliberately changes (two fixed people, seeded favourites, …) must be rewritten to the new behaviour, and you must list each one with the reason in your report. Everything else stays.
 
 ## Environment (Windows 11)
-- Project root: `C:\claudecodeprojects\what-to-watch`.
-- Node and the GitHub CLI are installed but may not be on PATH in your shell. In Bash start commands with:
-  `export PATH="/c/Program Files/nodejs:/c/Program Files/GitHub CLI:$PATH"`
-- `npm run build` (typecheck + Vite build), `npm test` (Vitest, files matching `src/**/*.test.ts(x)` and `scripts/**/*.test.ts`), `npm run dev` (dev server at http://localhost:5173/what-to-watch/).
-- Dev switches: `?catalog=fixture` uses the sample catalog in `src/contracts/fixtures/catalog.ts`; `?sync=memory` keeps data on the device only (no Firebase).
-- TypeScript is strict. Code must typecheck under the root `tsconfig.json`.
-- No secrets in files, ever. The TMDB token exists only as the GitHub Actions secret `TMDB_TOKEN`.
-
-## Shape of the app
-- `src/contracts/` — shared types: `catalog.ts` (services/plans, catalog item shape), `state.ts` (people, requests, shared data), `engine.ts` (Engine API), `sync.ts` (SyncApi), `app.ts` (what the UI receives).
-- `src/app/main.tsx` loads the catalog, calls `createEngine()` and `createSync()`, and renders `<App services={...} />` from `src/ui`.
-- The site is served from the base path `/what-to-watch/` (GitHub Pages: https://harborpine.github.io/what-to-watch/).
+- Project root: `C:\claudecodeprojects\pick-tonight`.
+- In Bash start commands with: `export PATH="/c/Program Files/nodejs:/c/Program Files/GitHub CLI:$PATH"`
+- `npm run build` (typecheck + Vite build), `npm test` (Vitest: `src/**/*.test.ts(x)`, `scripts/**/*.test.ts`), `npm run test:sync` (integration against the real Firebase project `pick-tonight-5tkr8`), `npm run e2e` (Playwright, iPhone 14 / WebKit; never run two e2e runs at once, and not while someone runs `npm run build`), `npm run dev` (http://localhost:5173/pick-tonight/).
+- Dev switches: `?catalog=fixture` uses the sample catalog in `src/contracts/fixtures/catalog.ts`; `?sync=memory` keeps data on the device only; `?debug=1` exposes `window.__wtw` (the live services) for tests.
+- TypeScript is strict. No secrets in files, ever: the TMDB token exists only as the GitHub Actions secret `TMDB_TOKEN` (repo `harborpine/pick-tonight`), so TMDB can only be called from a workflow run.
+- GitHub: repo `harborpine/pick-tonight` (public), Pages source = GitHub Actions, site https://harborpine.github.io/pick-tonight/ . A push to `main` runs the deploy workflow.
+- Firebase: project `pick-tonight-5tkr8`, Firestore `(default)` in nam5, free Spark plan, no emulator (Java isn't installed). CLI is signed in: `npx firebase-tools deploy --only firestore:rules --project pick-tonight-5tkr8 --non-interactive`.
 - The app name comes only from `src/config.ts` (`APP_NAME`). Never hard-code it.
 
 ## When you finish
-End with a short report: what you built, what you verified and how (commands + results), anything not done or uncertain, and any contract changes you need. Be honest about failures.
-
-## Version 2 (11 Oct 2026) — read before touching anything
-The app is LIVE and the owners are using it with real data. Seven changes are being added; the lead has already updated `src/contracts/` (see the commit "Contracts v2"). Summary:
-1. Time: `TimeBudget` gains `'any'` ("I don't care": no limit, no length preference).
-2. A solo right-swipe no longer navigates away; it adds a `PickEntry` (`SharedState.picks`, formerly `history`) and the deck carries on.
-3. New **Matches** tab = `picks` (solo right-swipes + Together matches). Picked titles are excluded from decks for the people concerned (`Engine.isPicked`).
-4. **History** tab = what a person has watched = `SharedState.seen`, whose values are now `SeenEntry` objects (was a number). Only "I watched this", manual add, the first-run grid, or an import write to it (`SyncApi.markWatched` / `unmarkWatched`, replacing `setSeen`). Right-swipes and matches never do.
-5. Watch-history import: `Engine.parseWatchHistory` / `matchWatchHistory` / `learnFromImport` / `searchTitles`, using the on-demand lookup `AppServices.loadTitleIndex()` (`public/data/titles.json`, type `TitleIndex`).
-6. Novelty `'either'` leans new: about 1 card in 10 is a rewatch (`EITHER_REWATCH_SHARE`), soft.
-7. Follow-ups: `Engine.followUps` from `CatalogItem.latestSeason` and `CatalogItem.spinoffOf`, shown at the top of the New tab with a dot.
-
-Rules for v2:
-- **Existing households must keep working with no data loss and no user action** (old `seen` numbers, old "history" log). The old app version stays live until the lead deploys, so anything deployed to Firebase meanwhile (rules) must work for BOTH the old and the new app.
-- Do not `git push` (a push to main deploys). The catalog teammate may still push its own paths.
-- Tests that asserted behaviour replaced by the seven changes must be rewritten to the new behaviour, and each one listed in your report with the reason. Nothing else may be weakened or removed.
-- The fixture (`src/contracts/fixtures/catalog.ts`) now has follow-up data, `FIXTURE_TITLE_INDEX` and `FIXTURE_NETFLIX_CSV`.
+End with a short report: what you built, what you verified and how (commands + results), the list of tests whose expectations you changed and why, anything not done or uncertain, and any contract changes you need. Be honest about failures.

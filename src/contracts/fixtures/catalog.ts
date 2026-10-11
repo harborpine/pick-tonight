@@ -18,6 +18,7 @@
  *  - FIXTURE_TITLE_INDEX has two shows called "The Office" (US is more popular) and titles
  *    that are not on our services (Breaking Bad, Ted Lasso, Seinfeld, Parasite).
  */
+import type { FavoriteTitle, Member, PlanSelection as Plans } from '../index';
 import type {
   Attention,
   Catalog,
@@ -26,7 +27,6 @@ import type {
   MoodId,
   NewArrivals,
   StandoutEpisode,
-  TasteRef,
   TitleIndex,
   TitleIndexEntry,
   TitleKind,
@@ -46,6 +46,7 @@ interface Extra {
   certification?: string;
   latestSeason?: { number: number; airDate: string };
   spinoffOf?: string[];
+  lang?: string;
 }
 
 function make(
@@ -73,6 +74,7 @@ function make(
     poster: null,
     backdrop: null,
     overview: `${title} (${year}).`,
+    lang: x.lang ?? 'en',
     runtime,
     ...(kind === 'tv' ? { seasons: x.seasons ?? 5 } : {}),
     ...(x.latestSeason ? { latestSeason: x.latestSeason } : {}),
@@ -183,7 +185,7 @@ const items: CatalogItem[] = [
     { seasons: 3, rating: 8.2, votes: 1300, popularity: 170, certification: 'TV-MA', related: ['tv-76331'], latestSeason: { number: 3, airDate: '2026-09-25' } }),
   tv(93405, 'Squid Game', 2021, ['drama', 'thriller', 'mystery'], ['survival game', 'deadly game', 'korea', 'social commentary', 'debt', 'elimination'], 55, [8], 'high',
     { gripped: 0.95, hyped: 0.7, think: 0.5 },
-    { seasons: 3, rating: 7.8, votes: 15000, popularity: 800, certification: 'TV-MA', related: ['tv-222317', 'tv-70523'] }),
+    { seasons: 3, rating: 7.8, votes: 15000, popularity: 800, certification: 'TV-MA', related: ['tv-222317', 'tv-70523'], lang: 'ko' }),
   tv(72750, 'Killing Eve', 2018, ['drama', 'thriller', 'crime'], ['assassin', 'spy', 'cat and mouse', 'obsession', 'dark comedy', 'female lead'], 42, [8], 'medium',
     { gripped: 0.9, hyped: 0.5, laugh: 0.3 },
     { seasons: 4, rating: 8.0, votes: 1700, popularity: 90, related: ['tv-78191', 'tv-39269'] }),
@@ -205,7 +207,7 @@ const items: CatalogItem[] = [
       standout: [{ season: 3, episode: 4, name: 'San Junipero', runtime: 61 }] }),
   tv(70523, 'Dark', 2017, ['drama', 'scifi', 'mystery'], ['time travel', 'germany', 'missing child', 'small town', 'subtitled', 'complex plot'], 55, [8], 'high',
     { think: 0.9, gripped: 0.9 },
-    { seasons: 3, rating: 8.4, votes: 6800, popularity: 140, certification: 'TV-MA', scary: true, related: ['tv-42009', 'tv-66732'] }),
+    { seasons: 3, rating: 8.4, votes: 6800, popularity: 140, certification: 'TV-MA', scary: true, related: ['tv-42009', 'tv-66732'], lang: 'de' }),
 
   // ---- scary / horror / true crime (dealbreaker fodder) ----
   tv(66732, 'Stranger Things', 2016, ['drama', 'scifi', 'mystery'], ['1980s', 'supernatural', 'monster', 'small town', 'friendship', 'kids on bikes'], 50, [8], 'medium',
@@ -282,47 +284,67 @@ const items: CatalogItem[] = [
     { rating: 7.8, votes: 1100, popularity: 25, certification: 'G' }),
 ];
 
-function ref(kind: TitleKind, tmdbId: number, title: string, year: number, genres: GenreId[], keywords: string[], related: string[] = []): TasteRef {
-  return { id: `${kind}-${tmdbId}`, tmdbId, kind, title, year, genres, keywords, related };
+function ref(kind: TitleKind, tmdbId: number, title: string, year: number, genres: GenreId[], keywords: string[]): FavoriteTitle {
+  return { id: `${kind}-${tmdbId}`, kind, title, year, genres, keywords, poster: null };
 }
 
 const byId = new Map(items.map((i) => [i.id, i]));
-const fromItem = (id: string): TasteRef => {
+
+/** Favourites that are NOT in the catalog (taste signals only — they carry their own genres and keywords). */
+const offCatalog: FavoriteTitle[] = [
+  ref('movie', 273248, 'The Hateful Eight', 2015, ['western', 'mystery', 'drama'], ['bounty hunter', 'blizzard', 'whodunit', 'dark comedy', 'ensemble cast', 'dialogue driven']),
+  ref('tv', 222317, "The Devil's Plan", 2023, ['reality'], ['competition', 'strategy', 'social game', 'puzzle', 'korea', 'elimination']),
+  ref('tv', 39269, 'Scandal', 2012, ['drama'], ['political intrigue', 'washington dc', 'fixer', 'affair', 'female lead', 'soap']),
+  ref('tv', 61056, 'How to Get Away with Murder', 2014, ['drama', 'crime', 'mystery'], ['lawyer', 'law school', 'murder', 'twist ending', 'female lead', 'soap']),
+  ref('tv', 62816, 'Crazy Ex-Girlfriend', 2015, ['comedy'], ['musical', 'romantic comedy', 'obsession', 'female lead', 'mental health', 'satire']),
+  ref('tv', 87783, 'Why Women Kill', 2019, ['comedy', 'drama', 'crime'], ['dark comedy', 'infidelity', 'marriage', 'female lead', 'soap', 'period drama']),
+  ref('tv', 245927, 'Paradise', 2025, ['drama', 'thriller', 'mystery'], ['conspiracy', 'secret service', 'political intrigue', 'twist ending', 'murder mystery']),
+  ref('tv', 34307, 'Shameless', 2011, ['drama', 'comedy'], ['dysfunctional family', 'chicago', 'working class', 'dark comedy', 'alcoholism']),
+  ref('tv', 1395, 'Gossip Girl', 2007, ['drama', 'romance'], ['high society', 'new york city', 'gossip', 'teen drama', 'wealth', 'soap']),
+  ref('tv', 78191, 'You', 2018, ['drama', 'thriller', 'crime'], ['stalker', 'obsession', 'narration', 'serial killer', 'dark romance']),
+];
+
+const offById = new Map(offCatalog.map((r) => [r.id, r]));
+const fav = (id: string): FavoriteTitle => {
+  const off = offById.get(id);
+  if (off) return off;
   const i = byId.get(id);
-  if (!i) throw new Error(`fixture: ${id} is not a catalog item`);
-  const { tmdbId, kind, title, year, genres, keywords, related } = i;
-  return { id, tmdbId, kind, title, year, genres, keywords, related };
+  if (!i) throw new Error(`fixture: ${id} is neither a catalog item nor an off-catalog favourite`);
+  return { id, kind: i.kind, title: i.title, year: i.year, genres: i.genres, keywords: i.keywords, poster: null };
 };
-
-/** Favourites that are NOT on our services (taste signals only). */
-const offCatalogRefs: TasteRef[] = [
-  ref('movie', 273248, 'The Hateful Eight', 2015, ['western', 'mystery', 'drama'], ['bounty hunter', 'blizzard', 'whodunit', 'dark comedy', 'ensemble cast', 'dialogue driven'], ['movie-546554']),
-  ref('tv', 222317, "The Devil's Plan", 2023, ['reality'], ['competition', 'strategy', 'social game', 'puzzle', 'korea', 'elimination'], ['tv-205715', 'tv-14658', 'tv-93405']),
-  ref('tv', 39269, 'Scandal', 2012, ['drama'], ['political intrigue', 'washington dc', 'fixer', 'affair', 'female lead', 'soap'], ['tv-61056', 'tv-1416']),
-  ref('tv', 61056, 'How to Get Away with Murder', 2014, ['drama', 'crime', 'mystery'], ['lawyer', 'law school', 'murder', 'twist ending', 'female lead', 'soap'], ['tv-39269', 'tv-1416', 'tv-72750']),
-  ref('tv', 62816, 'Crazy Ex-Girlfriend', 2015, ['comedy'], ['musical', 'romantic comedy', 'obsession', 'female lead', 'mental health', 'satire'], ['tv-18347']),
-  ref('tv', 87783, 'Why Women Kill', 2019, ['comedy', 'drama', 'crime'], ['dark comedy', 'infidelity', 'marriage', 'female lead', 'soap', 'period drama'], ['tv-72750', 'tv-39269']),
-  ref('tv', 245927, 'Paradise', 2025, ['drama', 'thriller', 'mystery'], ['conspiracy', 'secret service', 'political intrigue', 'twist ending', 'murder mystery'], ['tv-93405']),
-  ref('tv', 34307, 'Shameless', 2011, ['drama', 'comedy'], ['dysfunctional family', 'chicago', 'working class', 'dark comedy', 'alcoholism'], ['tv-136315']),
-  ref('tv', 1395, 'Gossip Girl', 2007, ['drama', 'romance'], ['high society', 'new york city', 'gossip', 'teen drama', 'wealth', 'soap'], ['tv-91239', 'tv-4586']),
-  ref('tv', 78191, 'You', 2018, ['drama', 'thriller', 'crime'], ['stalker', 'obsession', 'narration', 'serial killer', 'dark romance'], ['tv-72750']),
-];
-
-const HG = ['tv-4556', 'tv-1100', 'movie-273248', 'movie-13', 'tv-1434', 'tv-456', 'tv-1437', 'tv-1416', 'movie-70160', 'tv-2190', 'tv-73021', 'tv-222317', 'tv-69478', 'tv-1399'];
-const BG = ['tv-39269', 'tv-1416', 'tv-87012', 'tv-14658', 'tv-205715', 'tv-18347', 'tv-61056', 'tv-1434', 'tv-69478', 'tv-91768', 'tv-222317', 'tv-93405', 'tv-1100', 'tv-1668', 'tv-62816', 'tv-72750', 'tv-87783', 'tv-245927', 'tv-34307', 'tv-1395', 'tv-4586', 'tv-78191'];
-
-const offIds = new Set(offCatalogRefs.map((r) => r.id));
-const tasteRefs: TasteRef[] = [
-  ...offCatalogRefs,
-  ...[...new Set([...HG, ...BG])].filter((id) => !offIds.has(id)).map(fromItem),
-];
 
 export const FIXTURE_CATALOG: Catalog = {
   schema: 1,
   builtAt: '2026-10-10T06:00:00.000Z',
   items,
-  tasteRefs,
-  seedFavorites: { HG, BG },
+};
+
+/**
+ * A sample household for tests and development. Nothing here ships to users.
+ *  - alex: comedy / adult-animation / fantasy fan, no dealbreakers.
+ *  - sam:  drama / reality / competition fan; never horror, true crime or anything scary.
+ *  - kit:  brand new — no favourites, no history (the "cold start" case).
+ */
+export const FIXTURE_MEMBERS: Record<'alex' | 'sam' | 'kit', Member> = {
+  alex: { id: 'alex', name: 'Alex', joinedAt: 1 },
+  sam: { id: 'sam', name: 'Sam', joinedAt: 2 },
+  kit: { id: 'kit', name: 'Kit', joinedAt: 3 },
+};
+
+export const FIXTURE_FAVORITES: Record<'alex' | 'sam' | 'kit', FavoriteTitle[]> = {
+  alex: (['tv-4556', 'tv-1100', 'movie-273248', 'movie-13', 'tv-1434', 'tv-456', 'tv-1437', 'tv-1416', 'movie-70160', 'tv-2190', 'tv-73021', 'tv-222317', 'tv-69478', 'tv-1399'] as string[]).map(fav),
+  sam: (['tv-39269', 'tv-1416', 'tv-87012', 'tv-14658', 'tv-205715', 'tv-18347', 'tv-61056', 'tv-1434', 'tv-69478', 'tv-91768', 'tv-222317', 'tv-93405', 'tv-1100', 'tv-1668', 'tv-62816', 'tv-72750', 'tv-87783', 'tv-245927', 'tv-34307', 'tv-1395', 'tv-4586', 'tv-78191'] as string[]).map(fav),
+  kit: [],
+};
+
+/** The plans the sample household has (six services; several ad tiers). */
+export const FIXTURE_PLANS: Plans = {
+  netflix: 'standard',
+  disney: 'premium',
+  hulu: 'ads',
+  hbo: 'ads',
+  peacock: 'premium',
+  paramount: 'essential',
 };
 
 export const FIXTURE_NEW_ARRIVALS: NewArrivals = {
@@ -360,7 +382,7 @@ export const FIXTURE_TITLE_INDEX: TitleIndex = {
   builtAt: '2026-10-10T06:00:00.000Z',
   titles: [
     ...items.map((i): TitleIndexEntry => ({ id: i.id, kind: i.kind, title: i.title, year: i.year, genres: i.genres, keywords: i.keywords.slice(0, 6), poster: null, popularity: i.popularity })),
-    ...offCatalogRefs.map((r): TitleIndexEntry => ({ id: r.id, kind: r.kind, title: r.title, year: r.year, genres: r.genres, keywords: r.keywords.slice(0, 6), poster: null, popularity: 50 })),
+    ...offCatalog.map((r): TitleIndexEntry => ({ id: r.id, kind: r.kind, title: r.title, year: r.year, genres: r.genres, keywords: r.keywords.slice(0, 6), poster: null, popularity: 50 })),
     // Not on our services at all:
     idx('tv', 1396, 'Breaking Bad', 2008, ['drama', 'crime', 'thriller'], ['drug dealer', 'teacher', 'cancer', 'crime boss'], 500),
     idx('tv', 97546, 'Ted Lasso', 2020, ['comedy', 'drama'], ['football', 'coach', 'wholesome', 'london'], 150),

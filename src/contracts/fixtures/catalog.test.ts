@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { ALL_PROVIDER_IDS, GENRES, MOODS } from '../catalog';
-import { FIXTURE_CATALOG, FIXTURE_NEW_ARRIVALS } from './catalog';
+import { ALL_PROVIDER_IDS, GENRES, MOODS, SERVICES } from '../catalog';
+import { FIXTURE_CATALOG, FIXTURE_FAVORITES, FIXTURE_MEMBERS, FIXTURE_NEW_ARRIVALS, FIXTURE_PLANS } from './catalog';
 
 describe('fixture catalog', () => {
   const ids = new Set(FIXTURE_CATALOG.items.map((i) => i.id));
@@ -16,11 +16,13 @@ describe('fixture catalog', () => {
       for (const m of Object.keys(i.moods)) expect(moods.has(m)).toBe(true);
     }
   });
-  it('resolves every seeded favourite to a taste reference', () => {
-    const refs = new Set(FIXTURE_CATALOG.tasteRefs.map((r) => r.id));
-    for (const id of [...FIXTURE_CATALOG.seedFavorites.HG, ...FIXTURE_CATALOG.seedFavorites.BG]) expect(refs.has(id)).toBe(true);
-    expect(FIXTURE_CATALOG.seedFavorites.HG).toHaveLength(14);
-    expect(FIXTURE_CATALOG.seedFavorites.BG).toHaveLength(22);
+  it('has a sample household with favourites, including ones outside the catalog', () => {
+    expect(FIXTURE_FAVORITES.alex).toHaveLength(14);
+    expect(FIXTURE_FAVORITES.sam).toHaveLength(22);
+    expect(FIXTURE_FAVORITES.kit).toHaveLength(0);
+    expect(FIXTURE_FAVORITES.alex.some((f) => !ids.has(f.id))).toBe(true);
+    expect(Object.keys(FIXTURE_MEMBERS)).toEqual(['alex', 'sam', 'kit']);
+    for (const svc of Object.keys(FIXTURE_PLANS)) expect(SERVICES.some((s) => s.id === svc)).toBe(true);
   });
   it('new arrivals point at catalog items', () => {
     for (const e of FIXTURE_NEW_ARRIVALS.entries) expect(ids.has(e.itemId)).toBe(true);

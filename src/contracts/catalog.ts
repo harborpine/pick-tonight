@@ -7,8 +7,8 @@
 // Services and plans
 // ---------------------------------------------------------------------------
 
-export const SERVICE_IDS = ['netflix', 'disney', 'hulu', 'hbo', 'peacock', 'paramount'] as const;
-export type ServiceId = (typeof SERVICE_IDS)[number];
+/** A streaming service's id: the `id` of an entry in SERVICES (e.g. 'netflix'). */
+export type ServiceId = string;
 
 export interface PlanDef {
   /** Stable id, unique within its service. */
@@ -29,6 +29,10 @@ export interface ServiceDef {
 }
 
 /**
+ * PUBLIC VERSION NOTE: this list is being widened to every major US subscription service.
+ * The catalog teammate verifies provider ids against TMDB and proposes the full table; the
+ * lead pastes it in here. Code must treat SERVICES as data (never assume these six).
+ *
  * Every plan the settings screen can offer. Provider ids verified against TMDB
  * /watch/providers (US) on 10 Oct 2026. TMDB has a single provider for Hulu,
  * HBO Max and Disney+, so their ad / ad-free plans share an id and differ only
@@ -85,18 +89,18 @@ export const SERVICES: ServiceDef[] = [
   },
 ];
 
-/** Which plan (by PlanDef.id) the household has for each service; null = not subscribed. */
-export type PlanSelection = Record<ServiceId, string | null>;
+/** Which plan (by PlanDef.id) the household has for each service; missing or null = not subscribed. */
+export type PlanSelection = Partial<Record<ServiceId, string | null>>;
 
-/** The household's plans as of the spec. */
-export const DEFAULT_PLANS: PlanSelection = {
-  netflix: 'standard',
-  disney: 'premium',
-  hulu: 'ads',
-  hbo: 'ads',
-  peacock: 'premium',
-  paramount: 'essential',
-};
+/** The service ids a household subscribes to under `plans`, sorted. */
+export function subscribedServices(plans: PlanSelection): ServiceId[] {
+  return SERVICES.filter((s) => {
+    const p = plans[s.id];
+    return p != null && s.plans.some((d) => d.id === p);
+  })
+    .map((s) => s.id)
+    .sort();
+}
 
 /** Every provider id the catalog build should record (all plans above, so plans stay editable). */
 export const ALL_PROVIDER_IDS: number[] = [...new Set(SERVICES.flatMap((s) => s.plans.flatMap((p) => p.providerIds)))];
@@ -201,6 +205,8 @@ export interface CatalogItem extends TitleCore {
   spinoffOf?: string[];
   /** US certification when known, e.g. 'TV-MA', 'PG-13'. */
   certification?: string;
+  /** Original language as an ISO 639-1 code, e.g. 'en', 'ko'. Used by the "nothing subtitled" choice. */
+  lang: string;
   /** TMDB vote average 0-10, vote count, and popularity. */
   rating: number;
   votes: number;
@@ -218,20 +224,22 @@ export interface CatalogItem extends TitleCore {
   flags: { horror: boolean; trueCrime: boolean; scary: boolean };
 }
 
-/**
- * A title used only as a taste signal (the seeded favourites, whether or not
- * they are on our services). Favourites that ARE in the catalog also appear here.
- */
-export type TasteRef = TitleCore;
-
 export interface Catalog {
   schema: 1;
   /** ISO timestamp of the build. */
   builtAt: string;
   items: CatalogItem[];
-  tasteRefs: TasteRef[];
-  /** Seeded favourites resolved to ids (each present in tasteRefs). */
-  seedFavorites: { HG: string[]; BG: string[] };
+}
+
+/**
+ * public/data/manifest.json — the list of per-service catalog files.
+ * Each file is a `Catalog` holding every title available on ANY plan of that service
+ * (a title on several services appears in several files, identical each time; merge by id).
+ */
+export interface CatalogManifest {
+  schema: 1;
+  builtAt: string;
+  services: Record<ServiceId, { /** Path relative to the site base, e.g. 'data/catalog/netflix.json'. */ file: string; titles: number; bytes: number }>;
 }
 
 export interface NewArrival {
@@ -287,50 +295,7 @@ export interface TitleIndex {
 }
 
 /** Catalog file locations, relative to the site base. */
-export const CATALOG_PATH = 'data/catalog.json';
+export const CATALOG_MANIFEST_PATH = 'data/manifest.json';
 export const NEW_ARRIVALS_PATH = 'data/new.json';
 export const TITLE_INDEX_PATH = 'data/titles.json';
 
-/** The seeded favourites, by name, for the catalog build to resolve to TMDB ids. */
-export const SEED_FAVORITE_TITLES: Record<'HG' | 'BG', { title: string; kind: TitleKind }[]> = {
-  HG: [
-    { title: 'Scrubs', kind: 'tv' },
-    { title: 'How I Met Your Mother', kind: 'tv' },
-    { title: 'The Hateful Eight', kind: 'movie' },
-    { title: 'Forrest Gump', kind: 'movie' },
-    { title: 'Family Guy', kind: 'tv' },
-    { title: 'The Simpsons', kind: 'tv' },
-    { title: 'Curb Your Enthusiasm', kind: 'tv' },
-    { title: "Grey's Anatomy", kind: 'tv' },
-    { title: 'The Hunger Games', kind: 'movie' },
-    { title: 'South Park', kind: 'tv' },
-    { title: 'Disenchantment', kind: 'tv' },
-    { title: "The Devil's Plan", kind: 'tv' },
-    { title: 'Summer House', kind: 'tv' },
-    { title: 'Game of Thrones', kind: 'tv' },
-  ],
-  BG: [
-    { title: 'Scandal', kind: 'tv' },
-    { title: "Grey's Anatomy", kind: 'tv' },
-    { title: 'The Great British Baking Show', kind: 'tv' },
-    { title: 'Survivor', kind: 'tv' },
-    { title: 'The Traitors', kind: 'tv' },
-    { title: 'Community', kind: 'tv' },
-    { title: 'How to Get Away with Murder', kind: 'tv' },
-    { title: 'Family Guy', kind: 'tv' },
-    { title: 'Summer House', kind: 'tv' },
-    { title: 'Love Island', kind: 'tv' },
-    { title: "The Devil's Plan", kind: 'tv' },
-    { title: 'Squid Game', kind: 'tv' },
-    { title: 'How I Met Your Mother', kind: 'tv' },
-    { title: 'Friends', kind: 'tv' },
-    { title: 'Crazy Ex-Girlfriend', kind: 'tv' },
-    { title: 'Killing Eve', kind: 'tv' },
-    { title: 'Why Women Kill', kind: 'tv' },
-    { title: 'Paradise', kind: 'tv' },
-    { title: 'Shameless', kind: 'tv' },
-    { title: 'Gossip Girl', kind: 'tv' },
-    { title: 'Gilmore Girls', kind: 'tv' },
-    { title: 'You', kind: 'tv' },
-  ],
-};

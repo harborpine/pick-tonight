@@ -5,7 +5,7 @@ import { APP_NAME, THEME_ACCENT } from '../config';
 import { createEngine } from '../engine';
 import { createSync } from '../sync';
 import { App } from '../ui';
-import { loadData, titleIndexLoader } from './loadCatalog';
+import { createCatalogStore, loadNewArrivals, titleIndexLoader } from './loadCatalog';
 
 /**
  * Wiring: load the catalog, start the engine and sync, hand them to the UI.
@@ -69,23 +69,43 @@ function Splash({ message, error }: { message: string; error?: boolean }) {
   );
 }
 
+/** Installed to the home screen (iOS sets navigator.standalone; other browsers use the display-mode query). */
+const standalone =
+  (navigator as Navigator & { standalone?: boolean }).standalone === true ||
+  (typeof matchMedia === 'function' && matchMedia('(display-mode: standalone)').matches);
+
+/** An invite link looks like <site>?join=ABC123. */
+const joinCode = (() => {
+  const raw = new URLSearchParams(location.search).get('join');
+  const code = raw ? raw.toUpperCase().replace(/[^A-Z0-9]/g, '') : '';
+  return code.length >= 4 && code.length <= 12 ? code : null;
+})();
+
+// iPhone keeps a browser tab's data separate from the installed app's. So that an invite survives
+// "Add to Home Screen", drop the manifest for this page view: with no manifest start_url, iOS saves
+// the CURRENT address (including ?join=CODE) as the icon's address, and the installed app opens with it.
+if (joinCode && !standalone) document.querySelector('link[rel="manifest"]')?.remove();
+
 async function boot() {
   root.render(<Splash message="Loading…" />);
   const catalogSource = option('catalog', ['live', 'fixture'], 'live') as 'live' | 'fixture';
   const syncMode = option('sync', ['firebase', 'memory'], 'firebase') as 'firebase' | 'memory';
 
-  const data = await loadData(catalogSource);
+  const newArrivals = await loadNewArrivals(catalogSource);
   const engine = createEngine();
   const sync = createSync({ mode: syncMode });
   // Don't block first paint on the network: the UI shows its own state while the device is 'loading'.
   void sync.init().catch((err) => console.error('sync init failed', err));
 
   const services: AppServices = {
-    catalog: data.catalog,
-    newArrivals: data.newArrivals,
+    catalogs: createCatalogStore(catalogSource),
+    newArrivals,
     engine,
     sync,
     loadTitleIndex: titleIndexLoader(catalogSource),
+    siteUrl: `${location.origin}${import.meta.env.BASE_URL}`,
+    joinCode,
+    standalone,
   };
   root.render(
     <StrictMode>
@@ -96,7 +116,7 @@ async function boot() {
 
 boot().catch((err) => {
   console.error(err);
-  root.render(<Splash error message="Couldn't load the catalog. Check your connection and try again." />);
+  root.render(<Splash error message="Couldn't start the app. Check your connection and try again." />);
 });
 
 if ('serviceWorker' in navigator && import.meta.env.PROD) {

@@ -1,16 +1,59 @@
 /**
- * CONTRACT: people, requests, and the shared live data both phones see.
+ * CONTRACT: people, requests, and the shared live data every phone in a household sees.
  * Only the lead edits files in src/contracts/.
+ *
+ * PUBLIC VERSION: a household has 1 to MAX_MEMBERS members, each with their own
+ * phone, name, profile and taste. Nothing about any particular person is built in.
  */
-import type { GenreId, MoodId, PlanSelection, ServiceId } from './catalog';
+import type { GenreId, MoodId, PlanSelection, ServiceId, TitleKind } from './catalog';
 
-export type PersonId = 'HG' | 'BG';
-export const PEOPLE: PersonId[] = ['HG', 'BG'];
-export type Who = PersonId | 'Together';
+// ---------------------------------------------------------------------------
+// Members and audiences
+// ---------------------------------------------------------------------------
 
-/** The people actually watching for a given `who`. */
-export function watchers(who: Who): PersonId[] {
-  return who === 'Together' ? ['HG', 'BG'] : [who];
+/**
+ * Opaque, stable id for one member of a household. Real households get 'm1', 'm2'…
+ * from the sync layer; any non-empty string without dots or slashes is valid
+ * (tests use readable ids). Never shown to users — show Member.name.
+ */
+export type MemberId = string;
+
+export const MAX_MEMBERS = 4;
+export const MAX_NAME_LENGTH = 20;
+
+export interface Member {
+  id: MemberId;
+  /** What the person typed at setup. Unique within the household (case-insensitive), 1..MAX_NAME_LENGTH chars. */
+  name: string;
+  joinedAt: number;
+}
+
+/**
+ * Who is watching: one or more member ids, no duplicates, sorted ascending
+ * (always build it with `normalizeWho`). One id = that person alone; two or more = together.
+ */
+export type Who = MemberId[];
+
+export function normalizeWho(ids: Iterable<MemberId>): Who {
+  return [...new Set(ids)].sort();
+}
+
+/** The people actually watching. (Kept as a function so call sites read the same as before.) */
+export function watchers(who: Who): MemberId[] {
+  return who;
+}
+
+export function isTogether(who: Who): boolean {
+  return who.length > 1;
+}
+
+export function sameWho(a: Who, b: Who): boolean {
+  return a.length === b.length && a.every((id, i) => id === b[i]);
+}
+
+/** True when the two audiences share at least one member. */
+export function whoOverlaps(a: Who, b: Who): boolean {
+  return a.some((id) => b.includes(id));
 }
 
 // ---------------------------------------------------------------------------
@@ -44,6 +87,7 @@ export type Novelty = 'new' | 'rewatch' | 'either';
 export const EITHER_REWATCH_SHARE = 0.1;
 
 export interface SuggestRequest {
+  /** Non-empty. */
   who: Who;
   viewing: ViewingType;
   mood: MoodId;
@@ -53,8 +97,8 @@ export interface SuggestRequest {
   genre: GenreId | null;
 }
 
-export const DEFAULT_REQUEST: SuggestRequest = {
-  who: 'Together',
+/** Everything except `who`, which the UI fills in (this phone's member by default). */
+export const DEFAULT_REQUEST: Omit<SuggestRequest, 'who'> = {
   viewing: 'focused',
   mood: 'laugh',
   time: 60,
@@ -89,7 +133,10 @@ export interface DeckCard {
   minutes: number;
   /** Higher is better; only meaningful within one deck. */
   score: number;
-  /** Short plain-language reasons, best first, e.g. "Because you love Scrubs". 0-3 entries. */
+  /**
+   * Short plain-language reasons, best first, 0-3 entries. They may name a member
+   * ("One of Sam's favourites") — the engine gets names from EngineContext.state.members.
+   */
   reasons: string[];
 }
 
@@ -99,12 +146,37 @@ export type SwipeAction = 'yes' | 'not-tonight' | 'seen' | 'save' | 'never';
 // Profiles
 // ---------------------------------------------------------------------------
 
+/** "Never show me…" choices. Hard exclusions for any audience that includes this member. */
 export interface Dealbreakers {
   horror: boolean;
   trueCrime: boolean;
   /** Nothing frightening, even if it isn't tagged horror. */
   scary: boolean;
+  /** Whole genres this person never wants (e.g. 'reality', 'animation', 'documentary'). */
+  genres: GenreId[];
+  /** Nothing whose original language isn't English (i.e. subtitled or dubbed). */
+  subtitled: boolean;
 }
+
+export const NO_DEALBREAKERS: Dealbreakers = { horror: false, trueCrime: false, scary: false, genres: [], subtitled: false };
+
+/**
+ * A favourite the person picked by search. It carries its own taste data because it
+ * may not be on the household's services (or in any loaded catalog). When the same id
+ * IS in the catalog, the engine prefers the catalog item's richer data.
+ */
+export interface FavoriteTitle {
+  id: string;
+  kind: TitleKind;
+  title: string;
+  year: number;
+  genres: GenreId[];
+  /** May be empty. */
+  keywords: string[];
+  poster: string | null;
+}
+
+export const MAX_FAVORITES = 40;
 
 /**
  * What the app has learned from swipes, layered on top of the favourites.
@@ -124,12 +196,12 @@ export interface TasteWeights {
 }
 
 export interface Profile {
-  id: PersonId;
-  /** Item ids. Favourites count as seen and are strong taste signals. */
-  favorites: string[];
+  id: MemberId;
+  /** At most MAX_FAVORITES. Favourites count as seen and are strong taste signals. May be empty. */
+  favorites: FavoriteTitle[];
   dealbreakers: Dealbreakers;
   taste: TasteWeights;
-  /** True once the first-run "tick what you've seen" grid is finished. */
+  /** True once this person has finished first-run setup (favourites, never-show-me, seen grid — each skippable). */
   onboarded: boolean;
 }
 
@@ -138,6 +210,7 @@ export interface Profile {
 // ---------------------------------------------------------------------------
 
 export interface Settings {
+  /** Household-wide: which plan the household has for each service. Missing / null = not subscribed. */
   plans: PlanSelection;
 }
 
@@ -158,7 +231,7 @@ export interface SeenEntry {
   source: SeenSource;
   /** Imports only: how many separate plays (episodes / viewings) the file listed. */
   plays?: number;
-  /** Title details, so the History tab can show titles that are not in the catalog. Always set for new entries. */
+  /** Title details, so the History tab can show titles that are not in the catalog. */
   snapshot?: TitleSnapshot;
 }
 
@@ -172,22 +245,24 @@ export interface SeenInput {
   snapshot: TitleSnapshot;
 }
 
-export type WatchlistOwner = PersonId | 'ours';
+/** A member's own list, or the household's shared list. */
+export type WatchlistOwner = MemberId | 'ours';
 
 export interface WatchlistEntry {
   itemId: string;
-  /** Whose list: mine (HG), hers (BG), or ours. One entry per (itemId, list). */
+  /** One entry per (itemId, list). */
   list: WatchlistOwner;
-  addedBy: PersonId;
+  addedBy: MemberId;
   at: number;
   snapshot: TitleSnapshot;
 }
 
 /**
  * One line on the Matches tab: a title someone swiped right on by themselves
- * ('solo') or that both said yes to in a Together session ('match').
+ * (kind 'solo', `who` = that one member — or the chosen audience when liked from the New feed)
+ * or that everyone watching said yes to in a Together session (kind 'match', `who` = the session audience).
  * A pick is NOT a record of watching — see SeenEntry for that.
- * While a pick exists, its title is left out of new decks for the people in `who`.
+ * While a pick exists, its title is left out of new decks for any audience that overlaps `who`.
  */
 export interface PickEntry {
   id: string;
@@ -209,34 +284,48 @@ export interface SessionMatch {
 
 export interface TogetherSession {
   id: string;
-  startedBy: PersonId;
+  startedBy: MemberId;
+  /** `request.who` is the audience: the members this session is for (2 or more, includes startedBy). */
   request: SuggestRequest;
-  /** The shared deck, in order. Both phones swipe exactly this. May be appended to. */
+  /** The shared deck, in order. Everyone swipes exactly this. May be appended to. */
   deck: DeckCard[];
-  /** Who has joined (the starter is always included). */
-  joined: PersonId[];
-  /** Item ids each person swiped yes on. */
-  yes: Record<PersonId, string[]>;
-  /** Item ids each person passed on (any non-yes action). */
-  passed: Record<PersonId, string[]>;
-  /** Titles both said yes to, oldest first. */
+  /** Audience members who have joined (the starter is always included). */
+  joined: MemberId[];
+  /** Item ids each audience member swiped yes on. A key exists for every audience member. */
+  yes: Record<MemberId, string[]>;
+  /** Item ids each audience member passed on (any non-yes action). A key exists for every audience member. */
+  passed: Record<MemberId, string[]>;
+  /** Titles EVERY audience member said yes to, oldest first. */
   matches: SessionMatch[];
   status: 'open' | 'ended';
   createdAt: number;
 }
 
+/**
+ * Everything the household shares. The per-member records (profiles, seen, never,
+ * notTonight) have a key for EVERY current member (empty object when nothing yet).
+ */
 export interface SharedState {
-  profiles: Record<PersonId, Profile>;
+  /** 1..MAX_MEMBERS entries. */
+  members: Record<MemberId, Member>;
+  profiles: Record<MemberId, Profile>;
   /** Everything each person has watched — the History tab. (Favourites count as seen too; use Engine.hasSeen.) */
-  seen: Record<PersonId, Record<string, SeenEntry>>;
+  seen: Record<MemberId, Record<string, SeenEntry>>;
   /** itemId -> ms timestamp tapped Never. */
-  never: Record<PersonId, Record<string, number>>;
+  never: Record<MemberId, Record<string, number>>;
   /** itemId -> local date (YYYY-MM-DD) it was swiped "not tonight". Hidden for that person on that date only. */
-  notTonight: Record<PersonId, Record<string, string>>;
+  notTonight: Record<MemberId, Record<string, string>>;
   watchlist: WatchlistEntry[];
   /** The Matches tab: solo right-swipes and Together matches, newest first. */
   picks: PickEntry[];
   settings: Settings;
-  /** The open Together session, if any (at most one at a time). */
+  /** The open Together session, if any (at most one at a time per household). */
   activeSession: TogetherSession | null;
+}
+
+/** Member ids in a stable display order (by join time, then id). */
+export function memberOrder(members: Record<MemberId, Member>): MemberId[] {
+  return Object.values(members)
+    .sort((a, b) => a.joinedAt - b.joinedAt || (a.id < b.id ? -1 : 1))
+    .map((m) => m.id);
 }

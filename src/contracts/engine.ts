@@ -7,7 +7,7 @@
 import type { Catalog, CatalogItem, MoodId, NewArrival, NewArrivals, PlanSelection, TitleIndex, TitleIndexEntry } from './catalog';
 import type {
   DeckCard,
-  PersonId,
+  MemberId,
   Profile,
   ServiceChoice,
   SharedState,
@@ -20,8 +20,12 @@ import type {
 /** Everything the engine needs besides the request. */
 export interface EngineContext {
   catalog: Catalog;
-  /** Only profiles, seen, never, notTonight, picks and settings are read. */
-  state: Pick<SharedState, 'profiles' | 'seen' | 'never' | 'notTonight' | 'picks' | 'settings'>;
+  /**
+   * Only members, profiles, seen, never, notTonight, picks and settings are read.
+   * `members` is the whole household (1..MAX_MEMBERS); a request's `who` is a subset of it.
+   * The engine must work for ANY household size and ANY non-empty audience.
+   */
+  state: Pick<SharedState, 'members' | 'profiles' | 'seen' | 'never' | 'notTonight' | 'picks' | 'settings'>;
   /** Local date, YYYY-MM-DD. Used for "not tonight" (hidden only on the date it was swiped). */
   today: string;
 }
@@ -90,7 +94,7 @@ export interface TasteInsight {
   text: string;
   /** Positive = likes, negative = avoids. Magnitude is relative strength, about -1..1. */
   strength: number;
-  /** Where it came from: seeded favourites, swipes, or a manual correction. */
+  /** Where it came from: the person's favourites, swipes / imports, or a manual correction. */
   source: 'favorites' | 'learned' | 'corrected';
   /** The manual correction currently applied, if any. */
   correction: 'more' | 'less' | null;
@@ -101,7 +105,7 @@ export interface Engine {
 
   /**
    * The moods to offer for this audience. 'scared' is offered only when no
-   * watcher has a horror or scary dealbreaker (i.e. HG watching alone).
+   * watcher has a horror or scary dealbreaker.
    */
   availableMoods(who: Who, ctx: EngineContext): MoodId[];
 
@@ -113,12 +117,12 @@ export interface Engine {
   chooseService(item: CatalogItem, plans: PlanSelection): ServiceChoice | null;
 
   /** Favourites count as seen. */
-  hasSeen(person: PersonId, itemId: string, ctx: EngineContext): boolean;
+  hasSeen(member: MemberId, itemId: string, ctx: EngineContext): boolean;
 
   /**
-   * True when Never hides this title for this audience: a solo watcher who
-   * tapped Never; anyone's Never for Together; and everywhere (any `who`) once
-   * both have tapped Never.
+   * True when Never hides this title for this audience: any watcher in `who` tapped
+   * Never; and everywhere (any `who`) once EVERY member of the household has tapped Never
+   * (in a household of one, that person's Never hides it everywhere).
    */
   isNeverHidden(itemId: string, who: Who, ctx: EngineContext): boolean;
 
@@ -130,7 +134,7 @@ export interface Engine {
 
   /**
    * True when the title is sitting on the Matches tab for any of these watchers
-   * (a pick whose `who` includes at least one of them). Such titles are left out
+   * (a pick whose `who` shares at least one member with this audience). Such titles are left out
    * of decks, the New feed and follow-ups until the pick is removed or the title is marked watched.
    */
   isPicked(itemId: string, who: Who, ctx: EngineContext): boolean;
@@ -195,8 +199,13 @@ export interface Engine {
 
   // ---- profiles and learning ----
 
-  /** A fresh profile seeded from catalog.seedFavorites and the spec's dealbreakers. */
-  defaultProfile(person: PersonId, catalog: Catalog): Profile;
+  /**
+   * An empty starting profile: no favourites, no dealbreakers, no learned taste, not onboarded.
+   * Nothing about any particular person is built in — the engine must give sensible,
+   * quality-led picks for a profile with NO favourites and NO history, and improve as
+   * favourites, imports and swipes arrive.
+   */
+  emptyProfile(): Omit<Profile, 'id'>;
 
   /** Returns an updated copy of the profile after a card action. Never mutates. */
   learnFromSwipe(profile: Profile, item: CatalogItem, action: SwipeAction, catalog: Catalog): Profile;

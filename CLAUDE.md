@@ -1,17 +1,13 @@
-# What to Watch (working name)
+# Pick Tonight (public version)
 
-A personal, free-to-run iPhone web app for two people (HG and BG) that suggests what to watch on the streaming plans they pay for.
+A free, public iPhone web app that helps a household of 1-4 people decide what to watch on the streaming plans they pay for. It is a separate copy of a private app; the private app (`C:\claudecodeprojects\what-to-watch`, repo `harborpine/what-to-watch`, Firebase `what-to-watch-90a38`) must never be modified from here.
 
-- **Read [SPEC.md](SPEC.md) first.** It is the full, authoritative spec: features, the seven rules that must hold, technical decisions, agent-team ownership, and the definition of done.
-- **Read PROGRESS.md** (once it exists) before resuming work; teammates are not restored after an interruption.
+- **Read [SPEC.md](SPEC.md) first**, then [TEAM.md](TEAM.md) (team rules, ownership, environment) and PROGRESS.md.
 - The owner is not a developer. Follow his global instructions: plain English, never show code, verify everything yourself, report risks.
 
 ## Hard rules
-- The TMDB token never goes in the repo or the app. It lives only as the GitHub Actions secret `TMDB_TOKEN`, and is never stored on this computer: anything that needs TMDB runs as a GitHub Actions workflow.
-- Never commit `.env*` files. The Firebase web config is not a secret and may be committed.
-- Don't commit or push unless the owner asks (the build's /goal counts as asking for the work it covers).
-- The project lives at `C:\claudecodeprojects\what-to-watch`, deliberately outside OneDrive.
-
-## Building
-- Team rules, ownership and environment notes: [TEAM.md](TEAM.md). Every teammate prompt should point at it.
-- Working name lives in `src/config.ts` (`APP_NAME`).
+- The TMDB token lives only as the GitHub Actions secret `TMDB_TOKEN` on `harborpine/pick-tonight`. Never on this computer, never in the repo.
+- TMDB use is non-commercial only (terms checked 11 Oct 2026): keep the TMDB logo + notice and the JustWatch credit in About. If the app ever earns money, it needs TMDB's commercial licence first.
+- Never commit `.env*` files. The Firebase web config is not a secret.
+- Don't commit or push unless the owner asks (a /goal counts as asking for the work it covers).
+- The repo must stay public or GitHub Pages turns off.
