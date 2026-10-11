@@ -2,7 +2,7 @@
 
 The app lives at this address:
 
-**https://harrisonglantz.github.io/what-to-watch/**
+**https://harborpine.github.io/what-to-watch/**
 
 It takes about five minutes. Do HG's phone first, then BG's. Both phones need an internet connection for this.
 

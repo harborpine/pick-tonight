@@ -6,12 +6,12 @@ Nothing has been built yet. The build starts when the owner issues a /goal.
 
 ### Tools on this PC
 - Node.js 24 LTS at `C:\Program Files\nodejs` and GitHub CLI at `C:\Program Files\GitHub CLI`, both installed via winget. Shells started before the install may not have them on PATH; add those folders explicitly.
-- `gh` is signed in as `harrisonglantz` (scopes: repo, workflow). Firebase CLI (`npx firebase-tools`) is signed in as the owner's Google account.
+- `gh` is signed in as `harborpine` (renamed from `harrisonglantz` on 11 Oct 2026) (scopes: repo, workflow). Firebase CLI (`npx firebase-tools`) is signed in as the owner's Google account.
 - firebase-tools switches to a non-interactive "paste a code" login when it sees agent environment variables (CLAUDE*, AI_AGENT). If login is ever needed again, open a normal console window with those cleared.
 
 ### GitHub — proven
-- Repo: https://github.com/harrisonglantz/what-to-watch (public; required for free Pages). Branch `main`.
-- Pages enabled with source = GitHub Actions. URL: https://harrisonglantz.github.io/what-to-watch/ (so the Vite base path is `/what-to-watch/`).
+- Repo: https://github.com/harborpine/what-to-watch (public; required for free Pages). Branch `main`.
+- Pages enabled with source = GitHub Actions. URL: https://harborpine.github.io/what-to-watch/ (so the Vite base path is `/what-to-watch/`).
 - Local git identity uses the GitHub noreply address so the owner's email is not in public commits.
 - Secret `TMDB_TOKEN` (TMDB v4 read access token) is set. It is not on this PC; anything touching TMDB must run in Actions.
 

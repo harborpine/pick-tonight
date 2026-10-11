@@ -16,7 +16,8 @@ import { allSeedTitles, chooseSearchResult, SEED_IDS, type SeedTitle } from './s
 import { countByDefaultService, validateCatalog, LIMITS } from './validate';
 import { isoDate, median, pMap, sleep } from './util';
 
-const SITE = process.env.SITE_URL ?? 'https://harrisonglantz.github.io/what-to-watch';
+// Derived from the repo owner so an account rename can't break the previous-build lookup.
+const SITE = process.env.SITE_URL ?? `https://${process.env.GITHUB_REPOSITORY_OWNER ?? 'harborpine'}.github.io/what-to-watch`;
 const OUT_DIR = path.resolve('public/data');
 const CACHE_DIR = path.resolve('.cache/catalog');
 const TARGET = { perService: Number(process.env.PER_SERVICE ?? 620), cap: Number(process.env.CAP ?? 3400), minPerService: 380 };

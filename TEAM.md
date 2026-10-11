@@ -29,7 +29,7 @@ You are one teammate on a small agent team building the app described in [SPEC.m
 ## Shape of the app
 - `src/contracts/` — shared types: `catalog.ts` (services/plans, catalog item shape), `state.ts` (people, requests, shared data), `engine.ts` (Engine API), `sync.ts` (SyncApi), `app.ts` (what the UI receives).
 - `src/app/main.tsx` loads the catalog, calls `createEngine()` and `createSync()`, and renders `<App services={...} />` from `src/ui`.
-- The site is served from the base path `/what-to-watch/` (GitHub Pages: https://harrisonglantz.github.io/what-to-watch/).
+- The site is served from the base path `/what-to-watch/` (GitHub Pages: https://harborpine.github.io/what-to-watch/).
 - The app name comes only from `src/config.ts` (`APP_NAME`). Never hard-code it.
 
 ## When you finish
