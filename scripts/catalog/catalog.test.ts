@@ -93,7 +93,7 @@ describe('tagging of famous titles', () => {
   it('horror movie is flagged horror + scary with scared mood', () => {
     const i = movieItem({ id: 9, title: 'Scary Thing', genres: genres(G.horror, G.thriller), keywords: ['haunted house'] });
     expect(i.flags).toEqual({ horror: true, trueCrime: false, scary: true });
-    expect(i.moods.scared).toBeGreaterThan(0.9);
+    expect(i.moods.scared).toBeGreaterThan(0.8);
   });
   it('TV horror (no horror genre on TMDB TV) is caught by keywords', () => {
     const i = tvItem({ name: 'Creepy', genres: genres(G.drama, G.mystery), keywords: ['slasher', 'gore'] });

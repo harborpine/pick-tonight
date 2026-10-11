@@ -44,6 +44,8 @@ async function discover(tmdb: TmdbClient, today: string): Promise<Map<string, Ca
       jobs.push({ kind, provider, sort: 'popularity.desc', pages: 12, extra: {} });
       jobs.push({ kind, provider, sort: 'vote_count.desc', pages: 12, extra: {} });
       jobs.push({ kind, provider, sort: 'vote_average.desc', pages: 6, extra: { 'vote_count.gte': kind === 'movie' ? 500 : 250 } });
+      const genreJobs = kind === 'tv' ? [10764, 10767, 99, 10749] : [99, 10749];
+      for (const gid of genreJobs) jobs.push({ kind, provider, sort: 'popularity.desc', pages: 4, extra: { with_genres: gid, 'vote_count.gte': 20 } });
       jobs.push({ kind, provider, sort: `${dateField}.desc`, pages: 5, extra: { 'vote_count.gte': 5, [`${dateField}.lte`]: today } });
     }
   }
@@ -248,6 +250,20 @@ async function main() {
     const id = seedIds.get(s.key);
     if (id) want.set(`${s.kind}-${id}`, { kind: s.kind, id });
   }
+
+  // Recommendations of every seed favourite join the candidate pool (kept only if on our plans and above the floor).
+  const seedRecs: Candidate[] = [];
+  for (const s of seeds) {
+    const id = seedIds.get(s.key);
+    if (!id) continue;
+    try {
+      const d = await tmdb.get<any>(`/${s.kind}/${id}/recommendations`, { language: 'en-US' });
+      for (const r of d.results ?? []) if (!r.adult) seedRecs.push({ kind: s.kind, id: r.id });
+    } catch {
+      /* optional */
+    }
+  }
+  for (const c of seedRecs) if (!want.has(`${c.kind}-${c.id}`)) want.set(`${c.kind}-${c.id}`, c);
 
   // Details
   log(`Fetching details for ${want.size} titles...`);

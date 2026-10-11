@@ -115,7 +115,7 @@ const USEFUL = [
 ];
 export function capKeywords(all: string[], max = 10): string[] {
   const score = (k: string) => (countKw([k], USEFUL) > 0 ? 0 : 1);
-  return [...all].map((k, i) => ({ k, i })).sort((a, b) => score(a.k) - score(b.k) || a.i - b.i).slice(0, max).map((x) => x.k);
+  return [...all].map((k, i) => ({ k: k.trim(), i })).sort((a, b) => score(a.k) - score(b.k) || a.i - b.i).slice(0, max).map((x) => x.k);
 }
 
 export function toTagInput(p: Parsed): TagInput {

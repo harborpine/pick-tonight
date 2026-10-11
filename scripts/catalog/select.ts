@@ -99,6 +99,11 @@ export function selectItems(pool: CatalogItem[], o: SelectOptions): CatalogItem[
     }
     for (const id of taken) chosen.set(id, pool.find((i) => i.id === id)!);
   }
+  // Genre reserves so reality / documentary / romance aren't crowded out by action and fantasy.
+  for (const [genre, kind, n] of [['reality', 'tv', 160], ['talk', 'tv', 25], ['documentary', 'tv', 90], ['documentary', 'movie', 70], ['romance', 'movie', 150], ['romance', 'tv', 70], ['comedy', 'tv', 150]] as const) {
+    const g = pool.filter((i) => i.kind === kind && i.genres.includes(genre)).sort((a, b) => priority(b) - priority(a));
+    for (const i of g.slice(0, n)) chosen.set(i.id, i);
+  }
   for (const i of pool) if (o.mustKeep.has(i.id)) chosen.set(i.id, i);
   return trimTo([...chosen.values()], o.cap, o.minPerService, o.mustKeep);
 }

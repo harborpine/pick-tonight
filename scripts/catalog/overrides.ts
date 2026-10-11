@@ -29,7 +29,11 @@ export const OVERRIDES: Override[] = [
   { kind: 'tv', title: 'Lost', year: 2004, attention: 'high' },
   { kind: 'tv', title: 'House of the Dragon', attention: 'high' },
   { kind: 'tv', title: 'Black Mirror', attention: 'high', dropIn: true },
-  { kind: 'tv', title: 'Squid Game', attention: 'high', flags: NOT_SCARY },
+  { kind: 'tv', title: 'Squid Game', attention: 'high', dropIn: false, flags: NOT_SCARY },
+  { kind: 'tv', title: 'The White Lotus', attention: 'medium', dropIn: false },
+  { kind: 'tv', title: 'Jeopardy!', attention: 'low', dropIn: true },
+  { kind: 'tv', title: 'Wheel of Fortune', attention: 'low', dropIn: true },
+  { kind: 'tv', title: "RuPaul's Drag Race", attention: 'low', dropIn: true },
   { kind: 'tv', title: "The Devil's Plan", attention: 'high' },
 
   // Easy to follow, drop-in.

@@ -89,6 +89,7 @@ const COMPETITION_KW = ['competition', 'strategy', 'elimination', 'social game',
 const EASY_REALITY_KW = ['baking', 'cooking', 'cooking competition', 'food', 'chef', 'dating show', 'dating', 'docusoap', 'makeover', 'home renovation', 'house hunting', 'home improvement', 'fashion', 'lifestyle', 'talent show', 'singing competition', 'family'];
 const NATURE_KW = ['nature', 'wildlife', 'animals', 'travel', 'cooking', 'food'];
 
+const STRONG_HORROR_KW = ['slasher', 'supernatural horror', 'haunted house', 'body horror', 'psychological horror', 'found footage', 'folk horror', 'cosmic horror', 'demonic possession', 'zombie', 'horror'];
 const HORROR_KW = [
   'horror', 'slasher', 'gore', 'splatter', 'body horror', 'psychological horror', 'supernatural horror', 'haunted house',
   'demonic possession', 'zombie', 'creature feature', 'found footage', 'ghost story',
@@ -134,13 +135,14 @@ export interface Tags {
 
 export function computeFlags(t: TagInput): Tags['flags'] {
   const g = new Set(t.genres);
-  const horror = g.has('horror') || hasKw(t.keywords, HORROR_KW);
+  const strongHorror = hasKw(t.keywords, STRONG_HORROR_KW);
+  const horror = g.has('horror') || strongHorror || countKw(t.keywords, HORROR_KW) >= 2;
   // Comedies that merely mention ghosts / vampires / witches (What We Do in the Shadows, Ghosts) are not scary.
   const comedyOnly = g.has('comedy') && !g.has('horror');
   // Animation (anime, kids) only counts as scary through explicit horror keywords; "supernatural" needs a dark genre.
   const animated = g.has('animation') || g.has('kids') || g.has('family');
   const supernatural = hasKw(t.keywords, ['supernatural']) && (['drama', 'mystery', 'thriller', 'scifi'] as GenreId[]).some((x) => g.has(x)) && !animated && !g.has('romance') && !g.has('fantasy');
-  let scary = horror || (!comedyOnly && !animated && (hasKw(t.keywords, SCARY_KW) || supernatural));
+  let scary = horror || (!comedyOnly && !animated && (scaryKw(t, g) || supernatural));
   if (comedyOnly && countKw(t.keywords, HORROR_KW) >= 2) scary = true;
   const doc = g.has('documentary');
   const trueCrime =
@@ -152,6 +154,13 @@ export function computeFlags(t: TagInput): Tags['flags'] {
   return { horror, trueCrime, scary };
 }
 
+/** One scary keyword counts only in a thriller / mystery / horror; otherwise two are needed. */
+function scaryKw(t: TagInput, g: Set<GenreId>): boolean {
+  const n = countKw(t.keywords, SCARY_KW);
+  if (n >= 2) return true;
+  return n === 1 && (g.has('thriller') || g.has('mystery') || g.has('horror')) && !g.has('fantasy') && !g.has('action');
+}
+
 // ---------------------------------------------------------------------------
 // dropIn (TV only)
 // ---------------------------------------------------------------------------
@@ -161,6 +170,7 @@ export function computeDropIn(t: TagInput): boolean {
   const g = new Set(t.genres);
   const kw = t.keywords;
   if (hasKw(kw, ['anthology'])) return true;
+  if (g.has('animation') && hasKw(kw, ['anime', 'manga'])) return false;
   if (g.has('talk') || g.has('kids')) return true;
   if (g.has('reality')) {
     const competitive = hasKw(kw, COMPETITION_KW);
@@ -315,11 +325,11 @@ export function computeMoods(t: TagInput, attention: Attention, flags: Tags['fla
   if (g.has('horror')) m.romantic -= 0.3;
 
   // scared
-  if (g.has('horror')) m.scared += 0.95;
-  else if (flags.horror) m.scared += 0.85;
-  else if (flags.scary) m.scared += 0.7;
-  if (g.has('thriller')) m.scared += 0.2;
-  if (hasKw(kw, SCARY_KW) && (flags.scary || flags.horror)) m.scared += 0.3;
+  if (g.has('horror')) m.scared += 0.85;
+  else if (flags.horror) m.scared += 0.75;
+  else if (flags.scary) m.scared += 0.5;
+  if (flags.scary && g.has('thriller')) m.scared += 0.1;
+  if (hasKw(kw, SCARY_KW) && (flags.scary || flags.horror)) m.scared += 0.1;
   if (!flags.scary && !flags.horror) m.scared = Math.min(m.scared, 0.3);
 
   // cry
@@ -344,7 +354,8 @@ export function computeMoods(t: TagInput, attention: Attention, flags: Tags['fla
 
   const out: Partial<Record<MoodId, number>> = {};
   for (const { id } of MOODS) {
-    const v = Math.max(0, Math.min(1, m[id]));
+    let v = Math.max(0, Math.min(1, m[id]));
+    if (v > 0.7) v = 0.7 + (v - 0.7) * 0.6; // soften saturation so "perfect fit" differs from "fits"
     if (v >= 0.2) out[id] = round2(v);
   }
   return out;
