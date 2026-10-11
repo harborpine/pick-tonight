@@ -6,13 +6,13 @@
  */
 import type {
   DeviceState,
-  HistoryEntry,
   HouseholdSeed,
   PersonId,
   SharedState,
   SyncApi,
   TogetherSession,
 } from '../contracts';
+import { decideSwipe } from './match';
 
 const KEY = 'wtw.memory-sync.v1';
 
@@ -21,7 +21,13 @@ interface Saved {
   state: SharedState | null;
 }
 
-const hasStorage = (): boolean => typeof localStorage !== 'undefined';
+const hasStorage = (): boolean => {
+  try {
+    return typeof localStorage !== 'undefined' && localStorage !== null;
+  } catch {
+    return false;
+  }
+};
 const uid = (): string => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
 export function createMemorySync(): SyncApi {
@@ -177,28 +183,10 @@ export function createMemorySync(): SyncApi {
       let matched = false;
       update((s) => {
         const sess = session(s, sessionId);
-        const other: PersonId = person === 'HG' ? 'BG' : 'HG';
-        const mine = yes ? sess.yes[person] : sess.passed[person];
-        if (!mine.includes(itemId)) mine.push(itemId);
-        if (yes && sess.yes[other].includes(itemId) && !sess.matches.some((m) => m.itemId === itemId)) {
-          const card = sess.deck.find((c) => c.itemId === itemId);
-          if (!card) return;
-          const at = Date.now();
-          sess.matches.push({ itemId, at });
-          const entry: HistoryEntry = {
-            id: uid(),
-            at,
-            kind: 'match',
-            who: 'Together',
-            itemId,
-            snapshot: matchSnapshot,
-            pick: card.pick,
-            service: card.service,
-            sessionId,
-          };
-          s.history.unshift(entry);
-          matched = true;
-        }
+        const d = decideSwipe(sess, person, itemId, yes, matchSnapshot, Date.now());
+        s.activeSession = d.session;
+        if (d.history) s.history.unshift(d.history);
+        matched = d.matched;
       });
       return matched;
     },

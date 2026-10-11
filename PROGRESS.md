@@ -40,3 +40,28 @@ Known limitation: TMDB has a single entry each for Hulu and HBO Max (no ad vs ad
 
 ### Not yet committed
 `.firebaserc`, `firebase.json`, `firestore.rules`, `firebase.web-config.json`, `PROGRESS.md` exist locally only. The first commit (spec, CLAUDE.md, .gitignore, tmdb-check workflow) is pushed.
+
+## Step 2: the build — IN PROGRESS (started 10 Oct 2026)
+
+Goal (owner's /goal): app fully built by the agent team and deployed; see SPEC.md "Definition of done".
+
+### Done by the lead
+- Scaffold (Vite + React + TS, Vitest, Playwright installed with chromium + webkit), `src/contracts/` (catalog, state, engine, sync, app), fixture catalog (55 titles) at `src/contracts/fixtures/catalog.ts`, `TEAM.md`, placeholder engine / memory sync / UI so the app runs: `npm run dev` then http://localhost:5173/what-to-watch/?catalog=fixture&sync=memory
+- Working name `Tonight` in `src/config.ts`. Time limits: 20→25 min, 45→50, 60→65, 2+ hrs→no limit (`TIME_LIMIT_MINUTES`).
+- Decision: e2e tests use the fixture catalog + the REAL Firebase project (no Java, so no emulator), each run pairing a fresh household.
+
+### Teammates (spawned in parallel; not restored after an interruption — respawn from TEAM.md + SPEC.md + the notes here)
+| Name | Model | Owns | Status |
+|---|---|---|---|
+| catalog | Sonnet | scripts/catalog, .github/workflows, public/data | running |
+| engine | Opus | src/engine | running |
+| sync | Sonnet | src/sync, firebase files | running |
+| ui | Sonnet | src/ui, public/ (not data) | running |
+| qa | Sonnet | tests/e2e | not started (after integration) |
+
+### Still to do after teammates report
+1. Integrate: build + tests clean, run the app against real Firebase + real catalog, fix seams.
+2. Engine tuning round on the real catalog (engine teammate).
+3. Spawn qa: Playwright at iPhone size, two contexts (HG + BG), Together match lands in history.
+4. Deploy: catalog workflow green on GitHub, Pages URL returns 200 and loads.
+5. INSTALL.md; final evidence list for every Definition-of-done item.

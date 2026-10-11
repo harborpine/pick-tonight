@@ -1,8 +1,11 @@
 import type { CreateSyncOptions, SyncApi } from '../contracts';
+import { createFirebaseSync } from './firebase';
 import { createMemorySync } from './memory';
 
-/** PLACEHOLDER wiring from the lead: the sync teammate adds the Firebase implementation. */
+/** Firebase mode does nothing (no network, no sign-in) until init() is called. */
 export function createSync(opts: CreateSyncOptions): SyncApi {
-  if (opts.mode === 'memory') return createMemorySync();
-  throw new Error('Firebase sync is not built yet. Open the app with ?sync=memory for now.');
+  return opts.mode === 'memory' ? createMemorySync() : createFirebaseSync();
 }
+
+export { createFirebaseSync } from './firebase';
+export type { FirebaseSyncApi, FirebaseSyncOptions } from './firebase';

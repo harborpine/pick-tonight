@@ -1,10 +1,107 @@
 rules_version = '2';
-// Setup placeholder: only signed-in app installs may read or write.
-// The build replaces this with pairing-code rules limited to our two phones.
+// Only the phones that belong to a household can read or write its data.
+// A phone becomes a member by (a) creating a brand new household, or
+// (b) redeeming a valid, unused, unexpired pairing code in one atomic write.
+// See src/sync/README.md for the data layout.
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /{document=**} {
-      allow read, write: if request.auth != null;
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function householdPath(hid) {
+      return /databases/$(database)/documents/households/$(hid);
+    }
+
+    function isMember(hid) {
+      return signedIn() && request.auth.uid in get(householdPath(hid)).data.members;
+    }
+
+    // ---- households: the member list lives here -------------------------------
+    match /households/{hid} {
+      // Members only. No listing, ever.
+      allow get: if signedIn() && request.auth.uid in resource.data.members;
+      allow list: if false;
+
+      // Anyone signed in may start their own, separate household (as its only member).
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['members', 'createdAt'])
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.members.keys().hasOnly([request.auth.uid])
+        && request.resource.data.members[request.auth.uid].keys().hasOnly(['person', 'at'])
+        && request.resource.data.members[request.auth.uid].person in ['HG', 'BG'];
+
+      allow update: if signedIn() && (joinWithCode(hid) || memberRemoval());
+
+      allow delete: if signedIn() && request.auth.uid in resource.data.members;
+
+      // A non-member adds exactly their own uid, in the same batch that marks a
+      // valid, unused, unexpired pairing code for THIS household as used by them.
+      function joinWithCode(hid) {
+        let n = request.resource.data;
+        let o = resource.data;
+        let uid = request.auth.uid;
+        let codePath = /databases/$(database)/documents/pairingCodes/$(n.lastJoinCode);
+        return n.diff(o).affectedKeys().hasOnly(['members', 'lastJoinCode'])
+          && !(uid in o.members)
+          && n.members.diff(o.members).affectedKeys().hasOnly([uid])
+          && n.members.size() <= 8
+          && n.members[uid].keys().hasOnly(['person', 'at'])
+          && n.members[uid].person in ['HG', 'BG']
+          && get(codePath).data.hid == hid
+          && get(codePath).data.used == false
+          && get(codePath).data.person != n.members[uid].person
+          && request.time < get(codePath).data.createdAt + duration.value(15, 'm')
+          && getAfter(codePath).data.used == true
+          && getAfter(codePath).data.usedBy == uid;
+      }
+
+      // A member may remove one member entry (their own on unpair, or a stale
+      // slot left by a wiped phone). It can never add or change entries.
+      function memberRemoval() {
+        let n = request.resource.data;
+        let o = resource.data;
+        return request.auth.uid in o.members
+          && n.diff(o).affectedKeys().hasOnly(['members'])
+          && n.members.diff(o.members).affectedKeys().size() == 1
+          && n.members.size() < o.members.size();
+      }
+    }
+
+    // ---- everything inside a household: members only ---------------------------
+    // data/{shared, seen_HG, seen_BG}, months/{YYYY-MM}, sessions/{id}
+    match /households/{hid}/{coll}/{docId} {
+      allow read, write: if isMember(hid);
+    }
+
+    // ---- one-time pairing codes -------------------------------------------------
+    match /pairingCodes/{code} {
+      // Fetching one code by its exact name is allowed (the joiner has to look
+      // up which household it opens). Listing/searching codes is not.
+      allow get: if signedIn();
+      allow list: if false;
+
+      allow create: if signedIn()
+        && code.matches('[A-HJ-NP-Z2-9]{6}')
+        && request.resource.data.keys().hasOnly(['hid', 'createdAt', 'createdBy', 'person', 'used'])
+        && request.resource.data.used == false
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.createdBy == request.auth.uid
+        && isMember(request.resource.data.hid)
+        && get(householdPath(request.resource.data.hid)).data.members[request.auth.uid].person == request.resource.data.person;
+
+      // Redeem: flip used -> true exactly once, while still fresh, and only in
+      // the same batch that adds the redeemer to the household.
+      allow update: if signedIn()
+        && resource.data.used == false
+        && request.time < resource.data.createdAt + duration.value(15, 'm')
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['used', 'usedBy'])
+        && request.resource.data.used == true
+        && request.resource.data.usedBy == request.auth.uid
+        && request.auth.uid in getAfter(householdPath(resource.data.hid)).data.members;
+
+      allow delete: if isMember(resource.data.hid);
     }
   }
 }

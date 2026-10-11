@@ -1,0 +1,153 @@
+/** Plain-language names for genres, keywords and traits (used in reasons and on the taste page). */
+import type { GenreId } from '../contracts';
+
+/** Fits after "You love ..." / "more ...". */
+export const GENRE_NOUNS: Record<GenreId, string> = {
+  action: 'action',
+  adventure: 'adventure stories',
+  animation: 'animation',
+  comedy: 'comedies',
+  crime: 'crime stories',
+  documentary: 'documentaries',
+  drama: 'dramas',
+  family: 'family-friendly picks',
+  fantasy: 'fantasy',
+  history: 'historical stories',
+  horror: 'horror',
+  kids: "kids' shows",
+  music: 'music and musicals',
+  mystery: 'mysteries',
+  reality: 'reality TV',
+  romance: 'romance',
+  scifi: 'sci-fi',
+  soap: 'soaps',
+  talk: 'talk shows',
+  thriller: 'thrillers',
+  war: 'war stories',
+  western: 'westerns',
+};
+
+export const TRAIT_PHRASES: Record<string, string> = {
+  'kind:movie': 'films',
+  'kind:tv': 'series',
+  dropIn: 'shows you can drop into at any episode',
+  serialized: 'series with a story you follow from the start',
+  short: 'half-hour episodes',
+  hourlong: 'hour-long episodes',
+  'attention:low': 'easy watching that needs little attention',
+  'attention:high': 'complicated shows that need your full attention',
+  classic: 'older classics',
+  recent: 'brand-new releases',
+};
+
+/** Common catalogue keywords, phrased to fit after "You love ...". */
+const KEYWORD_PHRASES: Record<string, string> = {
+  sitcom: 'sitcoms',
+  'workplace comedy': 'workplace comedies',
+  'hangout comedy': 'hangout comedies',
+  'adult animation': 'animated comedies for grown-ups',
+  satire: 'satire',
+  parody: 'parodies',
+  mockumentary: 'mockumentaries',
+  'dark comedy': 'dark comedies',
+  'cringe comedy': 'cringe comedy',
+  'romantic comedy': 'romantic comedies',
+  'crude humor': 'crude humour',
+  friendship: 'stories about friendship',
+  'female friendship': 'stories about female friendship',
+  family: 'stories about family',
+  'dysfunctional family': 'dysfunctional-family stories',
+  'family relationships': 'stories about family',
+  competition: 'competition shows',
+  'reality competition': 'competition shows',
+  strategy: 'strategy games',
+  'social game': 'social strategy games',
+  'survival game': 'survival-game stories',
+  'deadly game': 'deadly-game stories',
+  elimination: 'elimination contests',
+  'dating show': 'dating shows',
+  dating: 'stories about dating',
+  docusoap: 'reality soaps',
+  baking: 'baking shows',
+  cooking: 'cooking shows',
+  hospital: 'hospital stories',
+  doctor: 'stories about doctors',
+  'medical drama': 'medical dramas',
+  soap: 'soapy drama',
+  'female lead': 'stories with a woman in the lead',
+  'female protagonist': 'stories with a woman in the lead',
+  'woman director': 'work by women directors',
+  'political intrigue': 'political intrigue',
+  politics: 'political stories',
+  'twist ending': 'stories with a twist',
+  'murder mystery': 'murder mysteries',
+  whodunit: 'whodunits',
+  murder: 'murder stories',
+  detective: 'detective stories',
+  lawyer: 'legal dramas',
+  'based on novel': 'book adaptations',
+  'based on novel or book': 'book adaptations',
+  'based on young adult novel': 'young-adult book adaptations',
+  'based on comic': 'comic-book adaptations',
+  'based on true story': 'true stories',
+  'period drama': 'period dramas',
+  'teen drama': 'teen dramas',
+  'coming of age': 'coming-of-age stories',
+  'high school': 'high-school stories',
+  'small town': 'small-town stories',
+  'new york city': 'stories set in New York',
+  'los angeles, california': 'stories set in Los Angeles',
+  wholesome: 'wholesome, good-hearted stories',
+  romance: 'love stories',
+  love: 'love stories',
+  'love triangle': 'love triangles',
+  obsession: 'stories about obsession',
+  'high society': 'stories about high society',
+  wealth: 'stories about the very rich',
+  gossip: 'gossipy drama',
+  dystopia: 'dystopian stories',
+  superhero: 'superhero stories',
+  'time travel': 'time-travel stories',
+  anthology: 'anthology shows',
+  'ensemble cast': 'big ensemble casts',
+  'social commentary': 'stories with something to say about society',
+  survival: 'survival stories',
+  spy: 'spy stories',
+  assassin: 'stories about assassins',
+  heist: 'heist stories',
+  medieval: 'medieval settings',
+  'fantasy world': 'fantasy worlds',
+  magic: 'stories with magic',
+  nature: 'nature programmes',
+  'true crime': 'true crime',
+  'serial killer': 'serial-killer stories',
+  supernatural: 'supernatural stories',
+  revenge: 'revenge stories',
+  musical: 'musicals',
+  summer: 'summery settings',
+  'drama among friends': 'drama among friends',
+  'stand-up comedy': 'stand-up comedy',
+  'sketch comedy': 'sketch comedy',
+  'power struggle': 'power struggles',
+  'cat and mouse': 'cat-and-mouse thrillers',
+  conspiracy: 'conspiracy stories',
+  sports: 'sports stories',
+  christmas: 'Christmas stories',
+  anime: 'anime',
+};
+
+export function keywordPhrase(k: string): string {
+  return KEYWORD_PHRASES[k] ?? `“${k}” stories`;
+}
+
+/** The noun phrase for an insight key such as 'genre:comedy'; null if the key isn't one we understand. */
+export function phraseForKey(key: string): string | null {
+  const at = key.indexOf(':');
+  if (at < 0) return null;
+  const kind = key.slice(0, at);
+  const name = key.slice(at + 1);
+  if (kind === 'genre') return (GENRE_NOUNS as Record<string, string>)[name] ?? null;
+  if (kind === 'keyword') return name ? keywordPhrase(name) : null;
+  if (kind === 'trait') return TRAIT_PHRASES[name] ?? null;
+  return null;
+}
