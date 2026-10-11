@@ -192,6 +192,13 @@ export interface CatalogItem extends TitleCore {
   runtime: number;
   /** TV only. */
   seasons?: number;
+  /** TV only: the most recent season that has started airing, with its first air date (YYYY-MM-DD). */
+  latestSeason?: { number: number; airDate: string };
+  /**
+   * Ids of the titles this one is a spinoff of (or a direct continuation / sequel series of).
+   * Parents may be outside the catalog. Omitted when none are known.
+   */
+  spinoffOf?: string[];
   /** US certification when known, e.g. 'TV-MA', 'PG-13'. */
   certification?: string;
   /** TMDB vote average 0-10, vote count, and popularity. */
@@ -251,9 +258,38 @@ export function posterUrl(path: string | null, size: 'w185' | 'w342' | 'w500' | 
   return path ? `${TMDB_IMAGE_BASE}${size}${path}` : null;
 }
 
+/**
+ * public/data/titles.json — a broad name lookup used ONLY when importing a
+ * watch history or adding a watched title by hand. It covers every catalog
+ * item plus many well-known titles that are NOT on our services (so an
+ * imported history still matches). Loaded on demand, never at startup.
+ */
+export interface TitleIndexEntry {
+  id: string;
+  kind: TitleKind;
+  title: string;
+  year: number;
+  genres: GenreId[];
+  /** A few lower-cased keywords when cheaply known; may be empty. */
+  keywords: string[];
+  /** Other names the title is listed under (original title, common alternates). Omitted when none. */
+  aka?: string[];
+  /** TMDB poster path when known. */
+  poster?: string | null;
+  /** Relative popularity, for breaking ties between same-named titles. */
+  popularity: number;
+}
+
+export interface TitleIndex {
+  schema: 1;
+  builtAt: string;
+  titles: TitleIndexEntry[];
+}
+
 /** Catalog file locations, relative to the site base. */
 export const CATALOG_PATH = 'data/catalog.json';
 export const NEW_ARRIVALS_PATH = 'data/new.json';
+export const TITLE_INDEX_PATH = 'data/titles.json';
 
 /** The seeded favourites, by name, for the catalog build to resolve to TMDB ids. */
 export const SEED_FAVORITE_TITLES: Record<'HG' | 'BG', { title: string; kind: TitleKind }[]> = {

@@ -1,4 +1,4 @@
-import { CATALOG_PATH, NEW_ARRIVALS_PATH, type Catalog, type NewArrivals } from '../contracts';
+import { CATALOG_PATH, NEW_ARRIVALS_PATH, TITLE_INDEX_PATH, type Catalog, type NewArrivals, type TitleIndex } from '../contracts';
 
 export interface LoadedData {
   catalog: Catalog;
@@ -29,4 +29,25 @@ export async function loadData(source: 'live' | 'fixture'): Promise<LoadedData> 
   // The New feed is a nice-to-have: never block the app on it.
   const newArrivals = await getJson<NewArrivals>(NEW_ARRIVALS_PATH).catch(() => EMPTY_NEW);
   return { catalog, newArrivals };
+}
+
+/**
+ * The broad title lookup, fetched only when someone imports a watch history or
+ * adds a watched title by hand. Cached for the life of the page.
+ */
+export function titleIndexLoader(source: 'live' | 'fixture'): () => Promise<TitleIndex> {
+  let cached: Promise<TitleIndex> | null = null;
+  return () => {
+    cached ??= (async () => {
+      if (source === 'fixture') return (await import('../contracts/fixtures/catalog')).FIXTURE_TITLE_INDEX;
+      const index = await getJson<TitleIndex>(TITLE_INDEX_PATH);
+      if (index.schema !== 1 || !Array.isArray(index.titles)) throw new Error('unexpected format');
+      return index;
+    })().catch((err) => {
+      cached = null;
+      console.error('title index failed', err);
+      throw new Error("Couldn't load the list of titles. Check your connection and try again.");
+    });
+    return cached;
+  };
 }

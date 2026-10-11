@@ -13,8 +13,24 @@
  *  - Horror / true crime / scary titles for the dealbreaker rule.
  *  - High-attention titles (Game of Thrones, Dark, Succession, Inception).
  *  - Standout episodes (Scrubs, Black Mirror, Community, The Office).
+ *  - Follow-ups: recent seasons (Abbott Elementary S4, The Traitors S3, The Bear S3, Grey's Anatomy S21)
+ *    and a spinoff (tv-94997 House of the Dragon, spinoff of Game of Thrones).
+ *  - FIXTURE_TITLE_INDEX has two shows called "The Office" (US is more popular) and titles
+ *    that are not on our services (Breaking Bad, Ted Lasso, Seinfeld, Parasite).
  */
-import type { Attention, Catalog, CatalogItem, GenreId, MoodId, NewArrivals, StandoutEpisode, TasteRef, TitleKind } from '../catalog';
+import type {
+  Attention,
+  Catalog,
+  CatalogItem,
+  GenreId,
+  MoodId,
+  NewArrivals,
+  StandoutEpisode,
+  TasteRef,
+  TitleIndex,
+  TitleIndexEntry,
+  TitleKind,
+} from '../catalog';
 
 interface Extra {
   dropIn?: boolean;
@@ -28,6 +44,8 @@ interface Extra {
   votes?: number;
   popularity?: number;
   certification?: string;
+  latestSeason?: { number: number; airDate: string };
+  spinoffOf?: string[];
 }
 
 function make(
@@ -57,6 +75,8 @@ function make(
     overview: `${title} (${year}).`,
     runtime,
     ...(kind === 'tv' ? { seasons: x.seasons ?? 5 } : {}),
+    ...(x.latestSeason ? { latestSeason: x.latestSeason } : {}),
+    ...(x.spinoffOf ? { spinoffOf: x.spinoffOf } : {}),
     ...(x.certification ? { certification: x.certification } : {}),
     rating: x.rating ?? 7.8,
     votes: x.votes ?? 3000,
@@ -78,7 +98,7 @@ const items: CatalogItem[] = [
   // ---- sitcoms / easy comedy (low attention, drop-in) ----
   tv(4556, 'Scrubs', 2001, ['comedy', 'drama'], ['hospital', 'sitcom', 'friendship', 'workplace comedy', 'doctor', 'surreal humor'], 22, [15], 'low',
     { laugh: 0.9, cozy: 0.8, feelgood: 0.6, brainoff: 0.6, cry: 0.3 },
-    { dropIn: true, seasons: 9, rating: 8.0, votes: 2100, popularity: 120, related: ['tv-1100', 'tv-18347', 'tv-2316'],
+    { dropIn: true, seasons: 9, rating: 8.0, votes: 2100, popularity: 120, related: ['tv-1100', 'tv-18347', 'tv-2316'], latestSeason: { number: 9, airDate: '2009-12-01' },
       standout: [{ season: 3, episode: 14, name: 'My Screw Up', runtime: 22 }] }),
   tv(1100, 'How I Met Your Mother', 2005, ['comedy', 'romance'], ['sitcom', 'friendship', 'new york city', 'dating', 'bar', 'hangout comedy'], 22, [15, 8], 'low',
     { laugh: 0.9, cozy: 0.8, romantic: 0.5, feelgood: 0.6, brainoff: 0.7 },
@@ -114,7 +134,7 @@ const items: CatalogItem[] = [
     { dropIn: true, seasons: 8, rating: 8.2, votes: 2600, popularity: 160, related: ['tv-2316', 'tv-8592'] }),
   tv(125935, 'Abbott Elementary', 2021, ['comedy'], ['sitcom', 'workplace comedy', 'mockumentary', 'school', 'teacher', 'wholesome'], 22, [15, 1899], 'low',
     { laugh: 0.85, cozy: 0.85, feelgood: 0.9, brainoff: 0.7 },
-    { dropIn: true, seasons: 4, rating: 7.6, votes: 420, popularity: 90, related: ['tv-2316', 'tv-8592'] }),
+    { dropIn: true, seasons: 4, rating: 7.6, votes: 420, popularity: 90, related: ['tv-2316', 'tv-8592'], latestSeason: { number: 4, airDate: '2026-10-07' } }),
   tv(61662, "Schitt's Creek", 2015, ['comedy'], ['sitcom', 'small town', 'riches to rags', 'family', 'wholesome', 'lgbt'], 22, [15], 'low',
     { laugh: 0.85, cozy: 0.9, feelgood: 0.95, romantic: 0.4 },
     { dropIn: false, seasons: 6, rating: 8.2, votes: 900, popularity: 80, related: ['tv-8592', 'tv-125935'] }),
@@ -137,7 +157,7 @@ const items: CatalogItem[] = [
     { seasons: 46, rating: 7.4, votes: 420, popularity: 140, related: ['tv-205715', 'tv-222317'] }),
   tv(205715, 'The Traitors', 2023, ['reality'], ['competition', 'strategy', 'social game', 'deception', 'castle', 'elimination'], 55, [386], 'medium',
     { gripped: 0.85, brainoff: 0.5, hyped: 0.4 },
-    { seasons: 3, rating: 8.0, votes: 190, popularity: 100, related: ['tv-14658', 'tv-222317'] }),
+    { seasons: 3, rating: 8.0, votes: 190, popularity: 100, related: ['tv-14658', 'tv-222317'], latestSeason: { number: 3, airDate: '2026-10-05' } }),
   tv(91768, 'Love Island', 2019, ['reality', 'romance'], ['dating show', 'competition', 'villa', 'romance', 'summer'], 55, [386], 'low',
     { brainoff: 0.95, romantic: 0.5, cozy: 0.4 },
     { dropIn: true, seasons: 7, rating: 6.2, votes: 120, popularity: 160, related: ['tv-69478'] }),
@@ -148,16 +168,19 @@ const items: CatalogItem[] = [
   // ---- drama / gripping ----
   tv(1416, "Grey's Anatomy", 2005, ['drama', 'romance'], ['hospital', 'doctor', 'medical drama', 'romance', 'workplace drama', 'soap'], 43, [8, 15], 'medium',
     { gripped: 0.6, cry: 0.8, romantic: 0.7, cozy: 0.5 },
-    { seasons: 21, rating: 8.2, votes: 10500, popularity: 600, related: ['tv-39269', 'tv-61056', 'tv-4556'] }),
+    { seasons: 21, rating: 8.2, votes: 10500, popularity: 600, related: ['tv-39269', 'tv-61056', 'tv-4556'], latestSeason: { number: 21, airDate: '2026-10-01' } }),
   tv(1399, 'Game of Thrones', 2011, ['drama', 'fantasy', 'action'], ['based on novel', 'dragon', 'political intrigue', 'medieval', 'war', 'epic'], 57, [1899], 'high',
     { gripped: 0.95, hyped: 0.8, think: 0.4 },
     { seasons: 8, rating: 8.5, votes: 24000, popularity: 700, certification: 'TV-MA', related: ['tv-76331', 'tv-70523'] }),
+  tv(94997, 'House of the Dragon', 2022, ['drama', 'fantasy', 'action'], ['based on novel', 'dragon', 'political intrigue', 'medieval', 'civil war', 'prequel'], 60, [1899], 'high',
+    { gripped: 0.9, hyped: 0.8 },
+    { seasons: 2, rating: 8.4, votes: 5200, popularity: 400, certification: 'TV-MA', related: ['tv-1399'], spinoffOf: ['tv-1399'], latestSeason: { number: 2, airDate: '2024-06-16' } }),
   tv(76331, 'Succession', 2018, ['drama'], ['family business', 'power struggle', 'dark comedy', 'media empire', 'wealth', 'satire'], 60, [1899], 'high',
     { gripped: 0.9, think: 0.7, laugh: 0.3 },
     { seasons: 4, rating: 8.3, votes: 1900, popularity: 150, certification: 'TV-MA', related: ['tv-1399', 'tv-136315'] }),
   tv(136315, 'The Bear', 2022, ['drama', 'comedy'], ['restaurant', 'chef', 'chicago', 'family', 'stress', 'grief'], 30, [15], 'medium',
     { gripped: 0.8, cry: 0.5, think: 0.4 },
-    { seasons: 3, rating: 8.2, votes: 1300, popularity: 170, certification: 'TV-MA', related: ['tv-76331'] }),
+    { seasons: 3, rating: 8.2, votes: 1300, popularity: 170, certification: 'TV-MA', related: ['tv-76331'], latestSeason: { number: 3, airDate: '2026-09-25' } }),
   tv(93405, 'Squid Game', 2021, ['drama', 'thriller', 'mystery'], ['survival game', 'deadly game', 'korea', 'social commentary', 'debt', 'elimination'], 55, [8], 'high',
     { gripped: 0.95, hyped: 0.7, think: 0.5 },
     { seasons: 3, rating: 7.8, votes: 15000, popularity: 800, certification: 'TV-MA', related: ['tv-222317', 'tv-70523'] }),
@@ -315,3 +338,60 @@ export const FIXTURE_NEW_ARRIVALS: NewArrivals = {
     { itemId: 'tv-120998', type: 'title', providers: [387], date: '2026-10-02' },
   ],
 };
+
+// ---------------------------------------------------------------------------
+// Title lookup + a sample Netflix export, for the watch-history import
+// ---------------------------------------------------------------------------
+
+const idx = (kind: TitleKind, tmdbId: number, title: string, year: number, genres: GenreId[], keywords: string[], popularity: number, aka?: string[]): TitleIndexEntry => ({
+  id: `${kind}-${tmdbId}`,
+  kind,
+  title,
+  year,
+  genres,
+  keywords,
+  ...(aka ? { aka } : {}),
+  poster: null,
+  popularity,
+});
+
+export const FIXTURE_TITLE_INDEX: TitleIndex = {
+  schema: 1,
+  builtAt: '2026-10-10T06:00:00.000Z',
+  titles: [
+    ...items.map((i): TitleIndexEntry => ({ id: i.id, kind: i.kind, title: i.title, year: i.year, genres: i.genres, keywords: i.keywords.slice(0, 6), poster: null, popularity: i.popularity })),
+    ...offCatalogRefs.map((r): TitleIndexEntry => ({ id: r.id, kind: r.kind, title: r.title, year: r.year, genres: r.genres, keywords: r.keywords.slice(0, 6), poster: null, popularity: 50 })),
+    // Not on our services at all:
+    idx('tv', 1396, 'Breaking Bad', 2008, ['drama', 'crime', 'thriller'], ['drug dealer', 'teacher', 'cancer', 'crime boss'], 500),
+    idx('tv', 97546, 'Ted Lasso', 2020, ['comedy', 'drama'], ['football', 'coach', 'wholesome', 'london'], 150),
+    idx('tv', 1400, 'Seinfeld', 1989, ['comedy'], ['sitcom', 'new york city', 'observational comedy'], 200),
+    idx('movie', 496243, 'Parasite', 2019, ['thriller', 'drama', 'comedy'], ['class differences', 'korea', 'dark comedy'], 120, ['기생충', 'Gisaengchung']),
+    // Same name as tv-2316 (the US one), less popular: a bare "The Office" must resolve to the US show.
+    idx('tv', 2996, 'The Office', 2001, ['comedy'], ['mockumentary', 'workplace comedy', 'british'], 60),
+    // Same name, different kind and year.
+    idx('movie', 2000001, 'Dark', 1999, ['thriller'], [], 2),
+  ],
+};
+
+/**
+ * A small file in the exact layout Netflix exports (Account > Profile > Viewing activity > Download all).
+ * Collapses to: The Office x4 (US), Breaking Bad x3, Stranger Things x2, Paddington 2 x1, Parasite x1,
+ * Ted Lasso x1, Black Mirror x1 — and two rows that must come out UNMATCHED.
+ */
+export const FIXTURE_NETFLIX_CSV = `Title,Date
+"The Office (U.S.): Season 4: Dinner Party",10/2/26
+"The Office (U.S.): Season 2: The Dundies",9/30/26
+"The Office (U.S.): Season 2: Booze Cruise",9/29/26
+"The Office (U.S.): Season 1: Pilot",9/28/26
+"Breaking Bad: Season 5: Ozymandias",9/20/26
+"Breaking Bad: Season 5: Felina",9/21/26
+"Breaking Bad: Season 1: Pilot",8/1/26
+"Stranger Things: Stranger Things 2: Chapter One: MADMAX",7/4/26
+"Stranger Things: Chapter One: The Vanishing of Will Byers",7/1/26
+"Paddington 2",6/15/26
+"Parasite",5/5/26
+"Ted Lasso: Season 1: Biscuits",4/1/26
+"Black Mirror: Bandersnatch",3/3/26
+"Zzyzx Road Trip Diaries: Limited Series: Part 1",2/2/26
+"Completely Unknown Home Movie",1/1/26
+`;

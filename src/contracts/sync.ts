@@ -5,7 +5,8 @@
  */
 import type {
   DeckCard,
-  HistoryEntry,
+  PickEntry,
+  SeenInput,
   PersonId,
   Profile,
   Settings,
@@ -16,6 +17,13 @@ import type {
 } from './state';
 
 export type Unsubscribe = () => void;
+
+/**
+ * UPGRADE NOTE (v2): households created before this version stored
+ *   - `seen` values as plain numbers (ms timestamps)  -> read as { at, source: 'manual' } (no snapshot; the UI fills the title from the catalog)
+ *   - the pick log under the name "history"            -> read as `picks`
+ * The sync layer must read both old and new shapes forever: no user action, no data loss.
+ */
 
 export interface DeviceState {
   /**
@@ -63,14 +71,25 @@ export interface SyncApi {
 
   // ---- mutations (all resolve once accepted locally; they sync in the background) ----
 
-  setSeen(person: PersonId, itemIds: string[], seen: boolean): Promise<void>;
+  /**
+   * Add titles to a person's watched list (History tab). Re-marking a title updates its `at`
+   * (keeping the larger `plays`). Must cope with a few thousand entries in one call (an import).
+   */
+  markWatched(person: PersonId, entries: SeenInput[]): Promise<void>;
+  /** Remove titles from a person's watched list. */
+  unmarkWatched(person: PersonId, itemIds: string[]): Promise<void>;
   setNever(person: PersonId, itemId: string, never: boolean): Promise<void>;
   /** Hide from this person for `date` (YYYY-MM-DD, the phone's local date). */
   setNotTonight(person: PersonId, itemId: string, date: string): Promise<void>;
   addToWatchlist(list: WatchlistOwner, itemId: string, addedBy: PersonId, snapshot: TitleSnapshot): Promise<void>;
   removeFromWatchlist(list: WatchlistOwner, itemId: string): Promise<void>;
-  /** Log a solo pick. (Matches are logged automatically by swipeInSession.) `id` and `at` are filled in. */
-  addHistory(entry: Omit<HistoryEntry, 'id' | 'at'>): Promise<void>;
+  /**
+   * Add a solo right-swipe to the Matches tab. (Together matches are added automatically by swipeInSession.)
+   * `id` and `at` are filled in. Adding a title that already has a pick for the same `who` does nothing.
+   */
+  addPick(entry: Omit<PickEntry, 'id' | 'at'>): Promise<void>;
+  /** Remove one line from the Matches tab (by PickEntry.id). */
+  removePick(pickId: string): Promise<void>;
   saveProfile(profile: Profile): Promise<void>;
   saveSettings(settings: Settings): Promise<void>;
 
@@ -81,8 +100,8 @@ export interface SyncApi {
   joinSession(sessionId: string, person: PersonId): Promise<void>;
   /**
    * Record a swipe. When this is a yes and the other person has already said yes
-   * to the same title, a match is added to the session and to history exactly once
-   * (`matchSnapshot` supplies the title details for the history entry).
+   * to the same title, a match is added to the session and to `picks` exactly once
+   * (`matchSnapshot` supplies the title details for the pick entry).
    * Resolves to true iff this swipe created a match.
    */
   swipeInSession(

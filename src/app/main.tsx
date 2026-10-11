@@ -5,7 +5,7 @@ import { APP_NAME, THEME_ACCENT } from '../config';
 import { createEngine } from '../engine';
 import { createSync } from '../sync';
 import { App } from '../ui';
-import { loadData } from './loadCatalog';
+import { loadData, titleIndexLoader } from './loadCatalog';
 
 /**
  * Wiring: load the catalog, start the engine and sync, hand them to the UI.
@@ -80,7 +80,13 @@ async function boot() {
   // Don't block first paint on the network: the UI shows its own state while the device is 'loading'.
   void sync.init().catch((err) => console.error('sync init failed', err));
 
-  const services: AppServices = { catalog: data.catalog, newArrivals: data.newArrivals, engine, sync };
+  const services: AppServices = {
+    catalog: data.catalog,
+    newArrivals: data.newArrivals,
+    engine,
+    sync,
+    loadTitleIndex: titleIndexLoader(catalogSource),
+  };
   root.render(
     <StrictMode>
       <App services={services} />

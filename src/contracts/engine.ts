@@ -4,7 +4,7 @@
  * so results are deterministic and testable.
  * Only the lead edits files in src/contracts/.
  */
-import type { Catalog, CatalogItem, MoodId, NewArrival, NewArrivals, PlanSelection } from './catalog';
+import type { Catalog, CatalogItem, MoodId, NewArrival, NewArrivals, PlanSelection, TitleIndex, TitleIndexEntry } from './catalog';
 import type {
   DeckCard,
   PersonId,
@@ -20,8 +20,8 @@ import type {
 /** Everything the engine needs besides the request. */
 export interface EngineContext {
   catalog: Catalog;
-  /** Only profiles, seen, never, notTonight and settings are read. */
-  state: Pick<SharedState, 'profiles' | 'seen' | 'never' | 'notTonight' | 'settings'>;
+  /** Only profiles, seen, never, notTonight, picks and settings are read. */
+  state: Pick<SharedState, 'profiles' | 'seen' | 'never' | 'notTonight' | 'picks' | 'settings'>;
   /** Local date, YYYY-MM-DD. Used for "not tonight" (hidden only on the date it was swiped). */
   today: string;
 }
@@ -40,6 +40,46 @@ export interface DeckOptions {
 
 export interface NewCard extends DeckCard {
   arrival: NewArrival;
+}
+
+export interface FollowUp extends DeckCard {
+  type: 'new-season' | 'spinoff';
+  /** For 'new-season': the season number. */
+  season?: number;
+  /** The watched title this follows from (itself for 'new-season'). */
+  becauseItemId: string;
+  /** Plain-language line, e.g. "Season 4 is out" or "A spinoff of Game of Thrones". */
+  text: string;
+  /** Stable key for "have I shown this yet" tracking, e.g. 'season:tv-136315:4' or 'spinoff:tv-94997'. */
+  key: string;
+  /** YYYY-MM-DD the season started, when known. */
+  date?: string;
+}
+
+export interface HistoryRow {
+  /** The title text exactly as it appeared in the file. */
+  raw: string;
+  /** ms timestamp when the file gave a date. */
+  at?: number;
+}
+
+export interface ParsedHistory {
+  format: 'netflix' | 'csv' | 'json' | 'list' | 'unknown';
+  rows: HistoryRow[];
+}
+
+export interface ImportedTitle {
+  entry: TitleIndexEntry;
+  /** Number of rows that collapsed into this title (episodes / viewings). */
+  plays: number;
+  /** Latest date seen for it in the file, when dates were present. */
+  lastWatched?: number;
+}
+
+export interface ImportResult {
+  matched: ImportedTitle[];
+  /** Names that could not be matched confidently, most-played first. */
+  unmatched: { name: string; plays: number }[];
 }
 
 /** One line on the "what it has learned" page. */
@@ -88,12 +128,25 @@ export interface Engine {
    */
   choosePick(item: CatalogItem, req: SuggestRequest, ctx: EngineContext): { pick: WatchPick; minutes: number } | null;
 
-  /** True iff the title may appear in a deck for this request (all hard rules pass). */
+  /**
+   * True when the title is sitting on the Matches tab for any of these watchers
+   * (a pick whose `who` includes at least one of them). Such titles are left out
+   * of decks, the New feed and follow-ups until the pick is removed or the title is marked watched.
+   */
+  isPicked(itemId: string, who: Who, ctx: EngineContext): boolean;
+
+  /** True iff the title may appear in a deck for this request (all hard rules pass, and it is not already picked). */
   isEligible(item: CatalogItem, req: SuggestRequest, ctx: EngineContext): boolean;
 
   // ---- ranking ----
 
-  /** Eligible titles, best first. Never returns an ineligible title. */
+  /**
+   * Eligible titles, best first. Never returns an ineligible title.
+   * Novelty 'either' leans new: across a deck about EITHER_REWATCH_SHARE of the cards
+   * are titles a watcher has seen, spread through the deck rather than bunched; it is a
+   * lean, not a rule (fewer when there are few good rewatches, never forced).
+   * Time 'any' applies no limit and no length preference.
+   */
   buildDeck(req: SuggestRequest, ctx: EngineContext, opts?: DeckOptions): DeckCard[];
 
   /**
@@ -102,6 +155,43 @@ export interface Engine {
    * seasons), ranked by taste.
    */
   rankNewArrivals(arrivals: NewArrivals, who: Who, ctx: EngineContext): NewCard[];
+
+  /**
+   * "Because you watched…": for the watchers in `who`, (a) shows they have watched whose
+   * latest season started AFTER they last watched it (or within the last 60 days when the
+   * watch date is unknown, e.g. favourites), and (b) spinoffs / continuations
+   * (item.spinoffOf) of titles they have watched that they have not seen themselves.
+   * Only titles on our plans that pass dealbreakers, Never and isPicked. Newest / strongest first.
+   */
+  followUps(who: Who, ctx: EngineContext): FollowUp[];
+
+  // ---- watch-history import (pure text in, structured data out) ----
+
+  /**
+   * Read an exported watch-history file or a pasted list. Recognises Netflix's
+   * viewing-activity CSV ("Title","Date"), other CSV/TSV exports with a recognisable
+   * title column, JSON arrays of objects with a title-like field, and plain text with
+   * one title per line. Never throws: unreadable input gives format 'unknown' and no rows.
+   */
+  parseWatchHistory(text: string, filename?: string): ParsedHistory;
+
+  /**
+   * Collapse rows to titles ("Show: Season 2: Episode" -> the show, counting plays) and
+   * match them against the lookup by name (case, punctuation, articles, year suffixes and
+   * `aka` names tolerated; popularity breaks ties). Nothing is guessed loosely: a name
+   * with no confident match is reported as unmatched.
+   */
+  matchWatchHistory(parsed: ParsedHistory, index: TitleIndex): ImportResult;
+
+  /**
+   * Returns an updated COPY of the profile, learning taste from imported titles, weighted by
+   * plays (with diminishing returns, so one 200-episode show cannot swamp everything) and
+   * bounded like swipe learning. Manual corrections are never overwritten.
+   */
+  learnFromImport(profile: Profile, matched: ImportedTitle[], catalog: Catalog): Profile;
+
+  /** Find titles by name for "add something I've watched" (best first, at most `limit`). */
+  searchTitles(query: string, index: TitleIndex, limit: number): TitleIndexEntry[];
 
   // ---- profiles and learning ----
 
