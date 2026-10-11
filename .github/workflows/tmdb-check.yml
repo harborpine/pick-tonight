@@ -1,7 +1,9 @@
 name: TMDB check
 
-# Setup proof: confirms the TMDB_TOKEN secret works and prints the US
-# streaming providers whose names match our six services.
+# Setup proof and research: confirms the TMDB_TOKEN secret works, prints EVERY US
+# streaming provider TMDB knows (id, name, display priority), and then how many
+# titles each of the 150 highest-priority providers carries on a subscription
+# or free-with-ads basis. Used to decide which services the app offers.
 on:
   workflow_dispatch:
 
@@ -12,7 +14,7 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - name: List matching US providers
+      - name: List all US providers
         env:
           TMDB_TOKEN: ${{ secrets.TMDB_TOKEN }}
         run: |
@@ -20,13 +22,30 @@ jobs:
             echo "TMDB_TOKEN secret is missing"; exit 1
           fi
           for kind in movie tv; do
-            echo "== $kind providers (US) =="
             curl -sS --fail-with-body \
-              -H "Authorization: Bearer $TMDB_TOKEN" \
-              -H "Accept: application/json" \
-              "https://api.themoviedb.org/3/watch/providers/$kind?watch_region=US&language=en-US" \
-              | jq -r '.results[]
-                  | select(.provider_name | test("netflix|disney|hulu|hbo|max|peacock|paramount"; "i"))
-                  | "\(.provider_id)\t\(.provider_name)"' \
-              | sort -n
+              -H "Authorization: Bearer $TMDB_TOKEN" -H "Accept: application/json" \
+              "https://api.themoviedb.org/3/watch/providers/$kind?watch_region=US&language=en-US" > "$kind.json"
           done
+          echo "== ALL US providers: id, name, display priority (movie list / tv list) =="
+          jq -rs '
+            [ .[0].results[] | {id: .provider_id, name: .provider_name, m: (.display_priorities.US // .display_priority)} ] as $m
+            | [ .[1].results[] | {id: .provider_id, name: .provider_name, t: (.display_priorities.US // .display_priority)} ] as $t
+            | ( ($m | map({key: (.id|tostring), value: .}) | from_entries) ) as $mm
+            | ( ($t | map({key: (.id|tostring), value: .}) | from_entries) ) as $tt
+            | ([ $m[].id, $t[].id ] | unique) [] as $id
+            | [ $id, ($mm[$id|tostring].name // $tt[$id|tostring].name), ($mm[$id|tostring].m // "-"), ($tt[$id|tostring].t // "-") ]
+            | @tsv' movie.json tv.json | sort -t$'\t' -k3,3n
+
+      - name: Count titles per provider
+        env:
+          TMDB_TOKEN: ${{ secrets.TMDB_TOKEN }}
+        run: |
+          jq -rs '[ .[0].results[], .[1].results[] ] | map({id: .provider_id, name: .provider_name, p: (.display_priorities.US // .display_priority // 999)}) | unique_by(.id) | sort_by(.p) | .[0:150][] | "\(.id)\t\(.name)"' movie.json tv.json > top.tsv 2>/dev/null || true
+          echo "== subscription + free-with-ads titles per provider (US): movies / tv =="
+          while IFS=$'\t' read -r id name; do
+            [ -z "$id" ] && continue
+            m=$(curl -sS -H "Authorization: Bearer $TMDB_TOKEN" "https://api.themoviedb.org/3/discover/movie?watch_region=US&with_watch_providers=$id&with_watch_monetization_types=flatrate%7Cads&vote_count.gte=30" | jq -r '.total_results // "err"')
+            t=$(curl -sS -H "Authorization: Bearer $TMDB_TOKEN" "https://api.themoviedb.org/3/discover/tv?watch_region=US&with_watch_providers=$id&with_watch_monetization_types=flatrate%7Cads&vote_count.gte=30" | jq -r '.total_results // "err"')
+            printf '%s\t%s\tmovies=%s\ttv=%s\n' "$id" "$name" "$m" "$t"
+            sleep 0.1
+          done < top.tsv
