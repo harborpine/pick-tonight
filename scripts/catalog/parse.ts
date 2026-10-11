@@ -100,7 +100,7 @@ export function parseDetail(kind: TitleKind, d: any): Parsed | null {
     providers: usProviders(d),
     related: [...new Set<string>(related)],
     adult: !!d.adult,
-    runtimeGuess: kind === 'tv' && !(d.episode_run_time ?? []).some((x: number) => x > 0),
+    runtimeGuess: kind === 'tv' && (!(d.episode_run_time ?? []).some((x: number) => x > 0) || (genres.includes('comedy') && !genres.includes('drama') && (d.episode_run_time ?? []).some((x: number) => x >= 26 && x <= 32))),
     releaseDate: date,
     seasonPremieres,
   };
@@ -131,6 +131,7 @@ export function toTagInput(p: Parsed): TagInput {
     rating: p.rating,
     votes: p.votes,
     seasons: p.seasons,
+    certification: p.certification,
   };
 }
 

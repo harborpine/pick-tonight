@@ -189,7 +189,7 @@ describe('selection', () => {
     expect(passesFloor({ ...base, votes: 50, rating: 7, date: '2010-01-01' })).toBe(false);
     expect(passesFloor({ ...base, votes: 50, rating: 7, date: '2026-05-01' })).toBe(true);
     expect(passesFloor({ ...base, votes: 1000, rating: 4.9, date: '2010-01-01' })).toBe(false);
-    expect(passesFloor({ ...base, kind: 'tv', genreIds: [10764], votes: 60, rating: 5.8, date: '2018-01-01' })).toBe(true);
+    expect(passesFloor({ ...base, kind: 'tv', genreIds: [10764], votes: 60, rating: 6.4, date: '2018-01-01' })).toBe(true);
   });
   it('keeps every service represented instead of letting one crowd out the rest', () => {
     const pool: CatalogItem[] = [];
@@ -376,5 +376,50 @@ describe('flag tuning', () => {
   });
   it('game show keyword alone does not make a drama drop-in', () => {
     expect(tvItem({ name: 'Deadly Games', genres: genres(G.drama), keywords: ['fictional game show', 'game show'] }).dropIn).toBe(false);
+  });
+});
+
+describe('mood tuning', () => {
+  it('acclaimed serialized dramas are gripping; procedurals and teen mysteries are mid', () => {
+    const bb = tvItem({ name: 'Serial Prestige', genres: genres(G.drama, G.crime), vote_average: 8.9, vote_count: 14000, keywords: ['drug dealer'] });
+    expect(bb.moods.gripped).toBeGreaterThanOrEqual(0.85);
+    const bear = tvItem({ name: 'Kitchen Drama', genres: genres(G.drama, G.comedy), vote_average: 8.3, vote_count: 1500, keywords: ['restaurant'] });
+    expect(bear.moods.gripped).toBeGreaterThanOrEqual(0.85);
+    const rookie = tvItem({ name: 'Cops', genres: genres(G.drama, G.crime), number_of_seasons: 6, vote_average: 8.4, vote_count: 3000, keywords: ['police officer', 'police procedural', 'rookie'] });
+    expect(rookie.moods.gripped).toBeLessThanOrEqual(0.6);
+    const teen = tvItem({ name: 'Teen Town', genres: genres(G.drama, G.mystery), vote_average: 8.4, vote_count: 5000, keywords: ['high school', 'murder'] });
+    expect(teen.moods.gripped).toBeLessThanOrEqual(0.6);
+  });
+  it('cry needs tearjerker signals; crime drama stays low', () => {
+    const crime = tvItem({ name: 'Meth', genres: genres(G.drama, G.crime), vote_average: 8.9, vote_count: 14000, keywords: ['drug dealer', 'death'] });
+    expect(crime.moods.cry ?? 0).toBeLessThanOrEqual(0.3);
+    const sad = movieItem({ title: 'Goodbye', genres: genres(18, 10749), keywords: ['terminal illness', 'tearjerker'] });
+    expect(sad.moods.cry).toBeGreaterThanOrEqual(0.8);
+  });
+  it('dark titles are never cozy or feel-good', () => {
+    const wed = tvItem({ name: 'Gothic Teen', genres: genres(G.comedy, G.mystery, G.fantasy), keywords: ['gothic', 'murder', 'high school'] });
+    expect(wed.moods.cozy ?? 0).toBe(0);
+    expect(wed.moods.feelgood ?? 0).toBe(0);
+    const ma = tvItem({ name: 'Grim', genres: genres(G.drama), certification: 'x', content_ratings: { results: [{ iso_3166_1: 'US', rating: 'TV-MA' }] }, keywords: ['family'] });
+    expect(ma.moods.cozy ?? 0).toBe(0);
+  });
+  it('a sitcom with a ghost premise is not scary and has no scared mood', () => {
+    const ghosts = tvItem({ name: 'Ghosts', genres: genres(G.comedy, G.fantasy), keywords: ['ghost', 'haunted', 'sitcom', 'supernatural'] });
+    expect(ghosts.flags.scary).toBe(false);
+    expect(ghosts.moods.scared ?? 0).toBeLessThan(0.3);
+  });
+  it('family / kids fantasy adventures are not scary (Harry Potter)', () => {
+    const hp = movieItem({ title: 'Harry Potter and the Prisoner of Azkaban', genres: genres(12, 14), keywords: ['dementor', 'ghost', 'monster', 'werewolf', 'curse'], release_dates: { results: [{ iso_3166_1: 'US', release_dates: [{ type: 3, certification: 'PG' }] }] } });
+    expect(hp.flags).toEqual({ horror: false, trueCrime: false, scary: false });
+    const fam = movieItem({ title: 'Kid Quest', genres: genres(10751, 14, 12), keywords: ['monster', 'demon'] });
+    expect(fam.flags.scary).toBe(false);
+    expect(movieItem({ title: 'Real Horror', genres: genres(27, 10751) }).flags.horror).toBe(true);
+  });
+  it('moods do not saturate at 1.0', () => {
+    const i = tvItem({ name: 'Top', genres: genres(G.drama, G.crime, G.thriller), vote_average: 9, vote_count: 20000, keywords: ['conspiracy', 'suspense', 'cliffhanger'] });
+    expect(i.moods.gripped).toBeLessThan(1);
+  });
+  it('sitcom half-hours: pickRuntime takes the median, not the longest', () => {
+    expect(pickRuntime('tv', { episode_run_time: [22, 22, 24, 30] }, ['comedy'])).toBe(23);
   });
 });

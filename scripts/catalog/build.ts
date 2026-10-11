@@ -211,6 +211,8 @@ async function addStandouts(tmdb: TmdbClient, items: CatalogItem[], anthologyIds
     },
     8,
   );
+  // Half-hour sitcoms whose episodes carry no runtime data: TMDB's "30" really means ~22 minutes.
+  for (const i of items) if (i.kind === 'tv' && guessRuntime.has(i.id) && i.runtime >= 26 && i.runtime <= 32 && i.keywords.includes('sitcom') && !i.genres.includes('drama')) i.runtime = 24;
   log(`Episode runtimes: ${guessRuntime.size} shows had no typical length from TMDB; corrected ${fixed + shows.filter((s) => guessRuntime.has(s.id)).length}`);
   log(`Standout episodes: looked at ${shows.length} shows, ${withStandouts} have at least one`);
 }

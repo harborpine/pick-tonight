@@ -120,6 +120,8 @@ export interface TagInput {
   rating: number;
   votes: number;
   seasons?: number;
+  /** US certification (G, PG, TV-MA...). */
+  certification?: string;
 }
 
 export interface Tags {
@@ -151,6 +153,12 @@ export function computeFlags(t: TagInput): Tags['flags'] {
     (doc && hasKw(t.keywords, ['murder', 'serial killer', 'police investigation', 'wrongful conviction', 'trial', 'cold case'])) ||
     (g.has('crime') && hasKw(t.keywords, ['true story', 'based on true story', 'based on a true story']) && hasKw(t.keywords, ['murder', 'serial killer'])) ||
     TRUE_CRIME_NAME.test(t.title);
+  // Family / kids-certified fantasy adventures (Harry Potter, Narnia...) are not scary unless the horror genre is present.
+  const kidsCert = ['G', 'PG', 'TV-Y', 'TV-Y7', 'TV-G', 'TV-PG'].includes(t.certification ?? '');
+  if (!g.has('horror') && ((g.has('family') && (g.has('fantasy') || g.has('adventure') || g.has('animation'))) || (kidsCert && (g.has('fantasy') || g.has('adventure'))) || /^(harry potter|fantastic beasts)/i.test(t.title))) {
+    scary = false;
+    if (!strongHorror) return { horror: false, trueCrime, scary: false };
+  }
   return { horror, trueCrime, scary };
 }
 
@@ -254,7 +262,7 @@ export function computeAttention(t: TagInput, dropIn: boolean): Attention {
  *  cry      drama .3, romance .2, war .3; tearjerker/grief/terminal illness/loss keywords +.5; family+animation .3
  *  hyped    action .85, adventure .4, war .3, scifi .3, thriller .2, western .3; superhero/chase/martial arts/battle keywords +.3
  */
-export function computeMoods(t: TagInput, attention: Attention, flags: Tags['flags']): Partial<Record<MoodId, number>> {
+export function computeMoods(t: TagInput, attention: Attention, flags: Tags['flags'], dropIn = false): Partial<Record<MoodId, number>> {
   const g = new Set(t.genres);
   const kw = t.keywords;
   const m: Record<MoodId, number> = { laugh: 0, cozy: 0, brainoff: 0, gripped: 0, feelgood: 0, think: 0, romantic: 0, scared: 0, cry: 0, hyped: 0 };
@@ -287,18 +295,39 @@ export function computeMoods(t: TagInput, attention: Attention, flags: Tags['fla
   if (attention === 'high') m.brainoff = 0;
   m.brainoff -= darkPenalty * 0.8;
 
-  // gripped
-  if (g.has('thriller')) m.gripped += 0.8;
-  else if (g.has('mystery')) m.gripped += 0.7;
-  else if (g.has('crime')) m.gripped += 0.6;
-  else if (g.has('horror')) m.gripped += 0.5;
-  else if (g.has('action')) m.gripped += 0.4;
-  else if (g.has('drama')) m.gripped += 0.3;
-  else if (g.has('scifi')) m.gripped += 0.3;
-  if (g.has('reality') && hasKw(kw, COMPETITION_KW)) m.gripped = Math.max(m.gripped, 0.5);
-  if (hasKw(kw, ['cliffhanger', 'twist ending', 'plot twist', 'conspiracy', 'suspense', 'edge of your seat', 'whodunit', 'cat and mouse'])) m.gripped += 0.2;
-  if (g.has('comedy') && !g.has('drama') && !g.has('thriller') && !g.has('mystery')) m.gripped -= 0.2;
-  if (t.rating >= 7.8 && m.gripped > 0) m.gripped += 0.1;
+  // gripped: "can't stop watching". Serialized, well-rated, widely-voted drama / thriller / crime tops it;
+  // case-of-the-week procedurals and teen mysteries sit mid. Rating x vote count is a real input.
+  {
+    const serialized = t.kind === 'tv' && !dropIn;
+    const strongGenre = (['drama', 'thriller', 'crime', 'mystery', 'scifi', 'fantasy'] as GenreId[]).some((x) => g.has(x)) && !(g.has('comedy') && !g.has('drama'));
+    const acclaimed = t.rating >= 7.5 && t.votes >= 800;
+    const topAcclaimed = t.rating >= 8.0 && t.votes >= 2500;
+    let v = 0;
+    if (g.has('thriller')) v = 0.6;
+    else if (g.has('mystery')) v = 0.55;
+    else if (g.has('crime')) v = 0.5;
+    else if (g.has('horror')) v = 0.45;
+    else if (g.has('action')) v = 0.35;
+    else if (g.has('drama')) v = 0.3;
+    else if (g.has('scifi')) v = 0.3;
+    if (serialized && strongGenre) {
+      v = Math.max(v, 0.5);
+      if (acclaimed) v += 0.35;
+      if (topAcclaimed) v += 0.1;
+    } else if (t.kind === 'movie' && v > 0) {
+      if (t.rating >= 7.5 && t.votes >= 3000) v += 0.2;
+      if (t.rating >= 8.0 && t.votes >= 10000) v += 0.1;
+    }
+    if (hasKw(kw, ['suspense', 'cliffhanger', 'conspiracy', 'heist', 'survival', 'cat and mouse', 'power struggle', 'whodunit', 'twist ending', 'plot twist', 'edge of your seat', 'political intrigue']) && v > 0) v += 0.1;
+    if (g.has('reality') && hasKw(kw, COMPETITION_KW)) v = Math.max(v, 0.5);
+    if (g.has('comedy') && !g.has('drama') && !g.has('thriller') && !g.has('mystery')) v -= 0.2;
+    // case-of-the-week procedurals and teen / witchy mysteries: mid
+    const procedural = t.kind === 'tv' && ((dropIn && strongGenre) || ((t.seasons ?? 0) >= 3 && hasKw(kw, ['police procedural', 'procedural', 'firefighter', 'paramedic', 'first responders', 'emergency services', 'police officer', 'cop', 'rookie', 'medical drama']) && !hasKw(kw, ['conspiracy', 'cat and mouse', 'power struggle'])));
+    const teen = t.kind === 'tv' && hasKw(kw, ['high school', 'teen drama', 'teenager', 'witch', 'witchcraft']) && !hasKw(kw, ['survival game', 'death game', 'dystopia']);
+    if (procedural) v = Math.min(v, 0.58);
+    if (teen) v = Math.min(v, 0.6);
+    m.gripped = v;
+  }
 
   // feelgood
   if (g.has('family')) m.feelgood += 0.5;
@@ -332,14 +361,22 @@ export function computeMoods(t: TagInput, attention: Attention, flags: Tags['fla
   if (hasKw(kw, SCARY_KW) && (flags.scary || flags.horror)) m.scared += 0.1;
   if (!flags.scary && !flags.horror) m.scared = Math.min(m.scared, 0.3);
 
-  // cry
-  if (g.has('drama')) m.cry += 0.3;
-  if (g.has('romance')) m.cry += 0.2;
-  if (g.has('war')) m.cry += 0.3;
-  if (g.has('family') && g.has('animation')) m.cry += 0.3;
-  if (hasKw(kw, ['tearjerker', 'grief', 'terminal illness', 'death of a loved one', 'loss of loved one', 'loss', 'cancer', 'sad', 'bereavement', 'dying', 'heartbreak', 'tragedy'])) m.cry += 0.5;
-  if (g.has('comedy') && !g.has('drama')) m.cry -= 0.2;
-  if (g.has('reality') || g.has('talk') || g.has('kids')) m.cry = Math.min(m.cry, 0.1);
+  // cry: needs real tearjerker signals; crime / thriller / action stay low without them
+  {
+    const strongCry = hasKw(kw, ['tearjerker', 'grief', 'terminal illness', 'death of a loved one', 'loss of loved one', 'cancer', 'dying', 'heartbreak', 'tragic love', 'bereavement', 'tragedy', 'sad', 'illness', 'death of a parent', 'death of a child']);
+    let v = 0;
+    if (g.has('drama')) v += 0.2;
+    if (g.has('romance')) v += 0.15;
+    if (g.has('war')) v += 0.15;
+    if (g.has('family') && g.has('animation')) v += 0.25;
+    if (g.has('family') || g.has('music')) v += 0.05;
+    if (strongCry) v += 0.5;
+    if (hasKw(kw, ['coming of age', 'melancholy', 'first love']) && (g.has('drama') || g.has('romance'))) v += 0.15;
+    if ((g.has('crime') || g.has('thriller') || g.has('action') || g.has('horror') || g.has('mystery')) && !strongCry) v = Math.min(v, 0.3);
+    if (g.has('comedy') && !g.has('drama') && !strongCry) v -= 0.2;
+    if (g.has('reality') || g.has('talk') || g.has('kids')) v = Math.min(v, 0.1);
+    m.cry = v;
+  }
 
   // hyped
   if (g.has('action')) m.hyped += 0.85;
@@ -351,11 +388,24 @@ export function computeMoods(t: TagInput, attention: Attention, flags: Tags['fla
   if (hasKw(kw, ['superhero', 'car chase', 'martial arts', 'battle', 'heist', 'explosion', 'shootout', 'chase', 'fight', 'spy'])) m.hyped += 0.3;
   if (g.has('reality') && hasKw(kw, COMPETITION_KW)) m.hyped = Math.max(m.hyped, 0.4);
   if (dark > 3) m.cozy = 0;
+  // Dark titles are never cozy or feel-good: scary / horror, crime, thriller, war, TV-MA drama, gothic / murder tones.
+  const darkTone = flags.scary || flags.horror || hasKw(kw, ['gothic', 'macabre', 'serial killer', 'dark fantasy', 'gore', 'murder']) || (t.certification === 'TV-MA' && g.has('drama')) || (t.certification === 'R' && g.has('drama'));
+  const darkGenre = g.has('crime') || g.has('thriller') || g.has('war') || g.has('horror');
+  if (darkTone || (darkGenre && !g.has('comedy'))) {
+    m.cozy = 0;
+    m.feelgood = 0;
+  } else if (darkGenre) {
+    m.cozy = Math.min(m.cozy, 0.3);
+    m.feelgood = Math.min(m.feelgood, 0.3);
+  }
+  // Scared needs the flag; comedies with a supernatural premise (Ghosts) barely register.
+  if (!flags.scary && !flags.horror) m.scared = Math.min(m.scared, 0.3);
+  if (g.has('comedy') && !g.has('horror')) m.scared = Math.min(m.scared, 0.2);
 
   const out: Partial<Record<MoodId, number>> = {};
   for (const { id } of MOODS) {
     let v = Math.max(0, Math.min(1, m[id]));
-    if (v > 0.7) v = 0.7 + (v - 0.7) * 0.6; // soften saturation so "perfect fit" differs from "fits"
+    if (v > 0.9) v = 0.9 + (v - 0.9) * 0.5; // soften saturation so "perfect fit" differs from "fits"
     if (v >= 0.2) out[id] = round2(v);
   }
   return out;
@@ -400,7 +450,7 @@ export function tagTitle(t: TagInput, override: Override | undefined = findOverr
     scary: override?.flags?.scary ?? flags0.scary,
   };
   if (flags.horror) flags.scary = override?.flags?.scary ?? true;
-  const moods = computeMoods(t, attention, flags);
+  const moods = computeMoods(t, attention, flags, dropIn);
   for (const [k, v] of Object.entries(override?.moods ?? {})) {
     if (v === undefined) continue;
     if (v < 0.2) delete moods[k as MoodId];
