@@ -456,7 +456,8 @@ SPINOFF LINKS (${spinLinks.length}):`);
   await writeFile(path.join(OUT_DIR, 'catalog.json'), json);
   await writeFile(path.join(OUT_DIR, 'new.json'), JSON.stringify(diff.arrivals));
   await writeFile(path.join(OUT_DIR, 'pool.json'), JSON.stringify(pool));
-  log('\nWrote public/data/catalog.json, new.json, pool.json');
+  await writeFile(path.join(OUT_DIR, 'titles.json'), titlesJson);
+  log('\nWrote public/data/catalog.json, new.json, pool.json, titles.json');
 }
 
 function printSummary(c: Catalog, diff: ReturnType<typeof diffArrivals>, bytes: number, started: number, tmdb: TmdbClient) {
