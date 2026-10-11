@@ -79,6 +79,9 @@ export interface SelectOptions {
   mustKeep: Set<string>;
 }
 
+/** Ids picked by the genre reserves; the size trimmer leaves them alone so reality / documentary stay represented. */
+export const reservedIds = new Set<string>();
+
 export function selectItems(pool: CatalogItem[], o: SelectOptions): CatalogItem[] {
   const chosen = new Map<string, CatalogItem>();
   for (const sid of Object.keys(SERVICE_PROVIDERS) as ServiceId[]) {
@@ -102,7 +105,10 @@ export function selectItems(pool: CatalogItem[], o: SelectOptions): CatalogItem[
   // Genre reserves so reality / documentary / romance aren't crowded out by action and fantasy.
   for (const [genre, kind, n] of [['reality', 'tv', 160], ['talk', 'tv', 25], ['documentary', 'tv', 90], ['documentary', 'movie', 70], ['romance', 'movie', 150], ['romance', 'tv', 70], ['comedy', 'tv', 150]] as const) {
     const g = pool.filter((i) => i.kind === kind && i.genres.includes(genre)).sort((a, b) => priority(b) - priority(a));
-    for (const i of g.slice(0, n)) chosen.set(i.id, i);
+    for (const i of g.slice(0, n)) {
+      chosen.set(i.id, i);
+      if (genre === 'reality' || genre === 'talk' || genre === 'documentary') reservedIds.add(i.id);
+    }
   }
   for (const i of pool) if (o.mustKeep.has(i.id)) chosen.set(i.id, i);
   return trimTo([...chosen.values()], o.cap, o.minPerService, o.mustKeep);
@@ -118,7 +124,7 @@ export function trimTo(items: CatalogItem[], cap: number, min: number, mustKeep:
   let remaining = items.length;
   for (const i of order) {
     if (remaining <= cap) break;
-    if (mustKeep.has(i.id)) continue;
+    if (mustKeep.has(i.id) || reservedIds.has(i.id)) continue;
     const svcs = servicesOf(i.providers);
     if (svcs.some((s) => (counts.get(s) ?? 0) <= min)) continue;
     for (const s of svcs) counts.set(s, (counts.get(s) ?? 0) - 1);
