@@ -45,7 +45,7 @@ async function discover(tmdb: TmdbClient, today: string): Promise<Map<string, Ca
       jobs.push({ kind, provider, sort: 'vote_count.desc', pages: 12, extra: {} });
       jobs.push({ kind, provider, sort: 'vote_average.desc', pages: 6, extra: { 'vote_count.gte': kind === 'movie' ? 500 : 250 } });
       const genreJobs = kind === 'tv' ? [10764, 10767, 99, 10749] : [99, 10749];
-      for (const gid of genreJobs) jobs.push({ kind, provider, sort: 'popularity.desc', pages: 4, extra: { with_genres: gid, 'vote_count.gte': 20 } });
+      for (const gid of genreJobs) jobs.push({ kind, provider, sort: 'popularity.desc', pages: 6, extra: { with_genres: gid, 'vote_count.gte': 5 } });
       jobs.push({ kind, provider, sort: `${dateField}.desc`, pages: 5, extra: { 'vote_count.gte': 5, [`${dateField}.lte`]: today } });
     }
   }

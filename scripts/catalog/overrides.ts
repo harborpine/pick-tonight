@@ -77,7 +77,10 @@ export const OVERRIDES: Override[] = [
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 
+/** All matching entries merged (later entries win field by field). */
 export function findOverride(kind: TitleKind, title: string, year: number): Override | undefined {
   const n = norm(title);
-  return OVERRIDES.find((o) => o.kind === kind && norm(o.title) === n && (o.year === undefined || o.year === year));
+  const hits = OVERRIDES.filter((o) => o.kind === kind && norm(o.title) === n && (o.year === undefined || o.year === year));
+  if (!hits.length) return undefined;
+  return hits.reduce((a, b) => ({ ...a, ...b, flags: { ...a.flags, ...b.flags }, moods: { ...a.moods, ...b.moods } }));
 }
