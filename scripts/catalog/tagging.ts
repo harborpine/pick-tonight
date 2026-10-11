@@ -138,14 +138,15 @@ export interface Tags {
 export function computeFlags(t: TagInput): Tags['flags'] {
   const g = new Set(t.genres);
   const strongHorror = hasKw(t.keywords, STRONG_HORROR_KW);
-  const horror = g.has('horror') || strongHorror || countKw(t.keywords, HORROR_KW) >= 2;
+  const comedyOnly0 = g.has('comedy') && !g.has('horror');
+  const horror = g.has('horror') || (!comedyOnly0 && (strongHorror || countKw(t.keywords, HORROR_KW) >= 2));
   // Comedies that merely mention ghosts / vampires / witches (What We Do in the Shadows, Ghosts) are not scary.
   const comedyOnly = g.has('comedy') && !g.has('horror');
   // Animation (anime, kids) only counts as scary through explicit horror keywords; "supernatural" needs a dark genre.
   const animated = g.has('animation') || g.has('kids') || g.has('family');
   const supernatural = hasKw(t.keywords, ['supernatural']) && (['drama', 'mystery', 'thriller', 'scifi'] as GenreId[]).some((x) => g.has(x)) && !animated && !g.has('romance') && !g.has('fantasy');
   let scary = horror || (!comedyOnly && !animated && (scaryKw(t, g) || supernatural));
-  if (comedyOnly && countKw(t.keywords, HORROR_KW) >= 2) scary = true;
+
   const doc = g.has('documentary');
   const trueCrime =
     hasKw(t.keywords, TRUE_CRIME_KW) ||

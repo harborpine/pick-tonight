@@ -423,3 +423,10 @@ describe('mood tuning', () => {
     expect(pickRuntime('tv', { episode_run_time: [22, 22, 24, 30] }, ['comedy'])).toBe(23);
   });
 });
+
+describe('comedy with haunted premise', () => {
+  it('Ghosts-style sitcom: no horror, no scary even with several haunted keywords', () => {
+    const i = tvItem({ name: 'Ghosts', genres: genres(G.comedy), keywords: ['ghost', 'haunted house', 'ghost story', 'sitcom'] });
+    expect(i.flags).toEqual({ horror: false, trueCrime: false, scary: false });
+  });
+});

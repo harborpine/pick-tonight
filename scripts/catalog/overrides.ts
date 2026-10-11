@@ -53,6 +53,9 @@ export const OVERRIDES: Override[] = [
 
   // Tense / gripping, but the owner's girlfriend watches them: must not be flagged scary.
   { kind: 'tv', title: 'Killing Eve', flags: NOT_SCARY },
+  { kind: 'tv', title: 'Breaking Bad', moods: { gripped: 0.95, cry: 0.2 } },
+  { kind: 'tv', title: 'Better Call Saul', moods: { gripped: 0.9, cry: 0.2 } },
+  { kind: 'tv', title: 'The Bear', moods: { cry: 0.35 } },
   { kind: 'tv', title: 'You', year: 2018, flags: NOT_SCARY },
   { kind: 'tv', title: 'How to Get Away with Murder', flags: NOT_SCARY },
   { kind: 'tv', title: 'Scandal', year: 2012, flags: NOT_SCARY },
