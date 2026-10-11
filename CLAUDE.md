@@ -11,3 +11,7 @@ A personal, free-to-run iPhone web app for two people (HG and BG) that suggests 
 - Never commit `.env*` files. The Firebase web config is not a secret and may be committed.
 - Don't commit or push unless the owner asks (the build's /goal counts as asking for the work it covers).
 - The project lives at `C:\claudecodeprojects\what-to-watch`, deliberately outside OneDrive.
+
+## Building
+- Team rules, ownership and environment notes: [TEAM.md](TEAM.md). Every teammate prompt should point at it.
+- Working name lives in `src/config.ts` (`APP_NAME`).

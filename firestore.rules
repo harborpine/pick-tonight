@@ -1,0 +1,10 @@
+rules_version = '2';
+// Setup placeholder: only signed-in app installs may read or write.
+// The build replaces this with pairing-code rules limited to our two phones.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}
