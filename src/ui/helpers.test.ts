@@ -61,6 +61,7 @@ describe('pickText', () => {
   it('describes every kind of pick', () => {
     expect(pickText({ type: 'movie' })).toBe('Movie');
     expect(pickText({ type: 'series-start' })).toBe('Start the series');
+    expect(pickText({ type: 'season', season: 21 })).toBe('Watch the new season (Season 21)');
     expect(pickText({ type: 'any-episode' })).toBe('Put on any episode');
     expect(pickText({ type: 'episode', season: 3, episode: 14, name: 'My Screw Up' })).toBe(
       'Season 3, Episode 14 — “My Screw Up”',

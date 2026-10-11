@@ -69,6 +69,8 @@ export const DEFAULT_REQUEST: SuggestRequest = {
 export type WatchPick =
   | { type: 'movie' }
   | { type: 'series-start' }
+  /** A newly released season of a show the watcher already follows (follow-ups only). */
+  | { type: 'season'; season: number }
   | { type: 'any-episode' }
   | { type: 'episode'; season: number; episode: number; name: string };
 

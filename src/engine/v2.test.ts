@@ -388,7 +388,7 @@ describe('follow-ups ("because you watched...")', () => {
     const ctx = makeCtx({ seen: { HG: { [ABBOTT]: '2026-08-15' } } });
     const f = find('HG', ctx, ABBOTT)!;
     expect(f).toMatchObject({ type: 'new-season', season: 4, becauseItemId: ABBOTT, text: 'Season 4 is out', key: `season:${ABBOTT}:4`, date: '2026-10-07' });
-    expect(f.pick).toEqual({ type: 'any-episode' }); // normal pick logic, not an old standout episode
+    expect(f.pick).toEqual({ type: 'season', season: 4 }); // owner's change (11 Oct 2026): a new-season follow-up says to watch the new season
     expect(f.minutes).toBe(22);
     expect(f.service).toEqual({ serviceId: 'hulu', planId: 'ads', adFree: false });
     expect(Number.isFinite(f.score)).toBe(true);
@@ -530,5 +530,21 @@ describe('follow-ups ("because you watched...")', () => {
     expect(list.length).toBeGreaterThan(0);
     const plain = bare([title(1), title(2)]);
     expect(engine.followUps('Together', makeCtx({ catalog: plain, seen: { HG: ['tv-1'] } }))).toEqual([]);
+  });
+});
+
+describe('follow-ups: what to watch', () => {
+  it('a new-season follow-up tells you to watch that season, not to start the series', () => {
+    const ups = engine.followUps('HG', makeCtx());
+    const seasons = ups.filter((f) => f.type === 'new-season');
+    expect(seasons.length).toBeGreaterThan(0);
+    for (const f of seasons) expect(f.pick).toEqual({ type: 'season', season: f.season });
+    const grey = seasons.find((f) => f.itemId === 'tv-1416');
+    expect(grey?.pick).toEqual({ type: 'season', season: 21 });
+  });
+  it('a spinoff follow-up keeps the normal pick (you have not started it)', () => {
+    const spin = engine.followUps('HG', makeCtx()).filter((f) => f.type === 'spinoff');
+    expect(spin.length).toBeGreaterThan(0);
+    for (const f of spin) expect(f.pick.type).not.toBe('season');
   });
 });

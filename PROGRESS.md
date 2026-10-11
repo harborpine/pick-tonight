@@ -63,3 +63,14 @@ Goal (owner's /goal): app fully built by the agent team and deployed; see SPEC.m
 - Local: npm run build OK, npm test 228/228, npm run e2e 49/49 (run e2e alone: a concurrent build or second e2e run corrupts it).
 - Known limits are listed in INSTALL.md (pairing loss on both phones) and in the lead's final report: Hulu/HBO Max tier blind spot, rule-based mood/attention tags, New feed seeded from release dates on day one, 60-day schedule keep-alive unproven, not tested on a physical iPhone.
 - Tuning knobs: named constants at the top of src/engine/rank.ts, taste.ts, catalogIndex.ts; catalog overrides in scripts/catalog/overrides.ts.
+
+## Version 2 — COMPLETE and live (11 Oct 2026)
+Owner's seven changes: time "I don't care"; solo right-swipe stays on the deck; Matches tab (`picks`); History tab = watched only (`seen` as `SeenEntry`); watch-history import (+ `public/data/titles.json` lookup, 13,751 titles); "Either" leans new (~1 in 10 rewatch); follow-ups (new seasons + spinoffs) at the top of New with a dot.
+
+- Contracts changed in commit 810433a; TEAM.md has a "Version 2" section. Teammates this round: catalog2, engine2, sync2, ui2, qa2 (the v1 teammates were not restorable after the session pause).
+- Storage is backward compatible: the legacy numeric seen map and month "history" docs are still written; new details live in `households/{hid}/seenx` (see src/sync/README.md). `firestore.rules` unchanged. Ceiling: ~19,500 watched titles per person.
+- Verified before deploy: build OK; npm test 367/367; npm run test:sync 20/20; e2e 82 tests (run with `E2E_WORKERS=2`; two-phone Firebase tests can flake under 4 workers). `tests/e2e/specs/upgrade.spec.ts` proved a household created on the live v1 site survives being joined by the v2 build; it self-skips now that the live site is v2.
+- Deployed by run 38173630609 (commit fc3a608). Live smoke test passed (new files 200, time 'any', follow-ups, sample Netflix import).
+- Account renamed during v1: GitHub user is `harborpine`; site https://harborpine.github.io/what-to-watch/. Repo must stay PUBLIC or Pages turns off.
+- Known limits: only Netflix's per-profile export format is verified; same-named titles resolve by popularity; spinoff links are curated/pattern-based (42); a new-season follow-up card says "Start the series"; rewatch slots favour the same top favourites until more history exists.
+- Not started: the generic/public version (owner asked to hold). Concept notes are in the conversation only.

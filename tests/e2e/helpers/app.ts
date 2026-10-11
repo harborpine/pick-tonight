@@ -274,6 +274,8 @@ export async function findCard(page: Page, want: (c: CardInfo) => boolean, max =
 
 /** Run `fn` inside the page with the live services as first argument. */
 export async function wtw<T, A = undefined>(page: Page, fn: (w: any, arg: A) => T | Promise<T>, arg?: A): Promise<T> {
+  // The app installs the debug hook just after its first render; right after a reload it may not be there yet.
+  await page.waitForFunction(() => (window as any).__wtw != null, null, { timeout: 30_000 });
   return page.evaluate(
     ({ src, a }) => {
       const f = new Function('w', 'a', `return (${src})(w, a);`);

@@ -30,6 +30,7 @@ test('follow-ups: HG sees "Because you watched..." at the top: House of the Drag
   await expect(hotd.getByTestId('followup-service-ad-badge')).toHaveAttribute('data-adfree', 'false');
 
   const grey = fRow(page, 'tv-1416');
+  await expect(grey.getByTestId('followup-pick')).toHaveText('Watch the new season (Season 21)');
   await expect(grey).toHaveCount(1);
   await expect(grey).toHaveAttribute('data-type', 'new-season');
   await expect(grey.getByTestId('followup-text')).toContainText('Season 21');

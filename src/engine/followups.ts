@@ -116,7 +116,8 @@ export function followUps(who: Who, ctx: EngineContext): FollowUp[] {
         news: aired,
         card: {
           itemId: item.id,
-          pick: pick.pick,
+          // They already follow the show, so the thing to watch is the new season itself.
+          pick: { type: 'season', season: season.number },
           service,
           minutes: pick.minutes,
           score: feedScore(info, people, index, seenFlags),

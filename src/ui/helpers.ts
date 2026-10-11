@@ -33,6 +33,8 @@ export function pickText(pick: WatchPick): string {
       return 'Movie';
     case 'series-start':
       return 'Start the series';
+    case 'season':
+      return `Watch the new season (Season ${pick.season})`;
     case 'any-episode':
       return 'Put on any episode';
     case 'episode':
