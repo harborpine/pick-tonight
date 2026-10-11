@@ -11,6 +11,8 @@ export interface Parsed {
   tmdbId: number;
   kind: TitleKind;
   title: string;
+  /** TMDB original_title / original_name (may equal `title`). */
+  originalTitle: string;
   year: number;
   genres: GenreId[];
   /** All keywords, lower-cased, uncapped. */
@@ -80,6 +82,7 @@ export function parseDetail(kind: TitleKind, d: any): Parsed | null {
     tmdbId: d.id,
     kind,
     title,
+    originalTitle: (kind === 'movie' ? d.original_title : d.original_name) || '',
     year,
     genres,
     allKeywords,
@@ -104,6 +107,21 @@ export function parseDetail(kind: TitleKind, d: any): Parsed | null {
     releaseDate: date,
     seasonPremieres,
   };
+}
+
+/**
+ * The most recent season that has STARTED airing: season_number > 0 with an air date on or before `today`.
+ * Specials (season 0), undated and not-yet-aired seasons are ignored. Undefined when none qualifies.
+ */
+export function pickLatestSeason(premieres: { season: number; airDate: string }[], today: string): { number: number; airDate: string } | undefined {
+  let best: { number: number; airDate: string } | undefined;
+  for (const s of premieres) {
+    if (!(s.season > 0) || !/^\d{4}-\d{2}-\d{2}/.test(s.airDate)) continue;
+    const date = s.airDate.slice(0, 10);
+    if (date > today) continue;
+    if (!best || s.season > best.number) best = { number: s.season, airDate: date };
+  }
+  return best;
 }
 
 /** Keywords that the scoring engine can use come first in the capped list. */
@@ -148,7 +166,7 @@ export function toCore(p: Parsed, maxRelated = 8): TitleCore {
   };
 }
 
-export function toCatalogItem(p: Parsed): CatalogItem {
+export function toCatalogItem(p: Parsed, today?: string): CatalogItem {
   const tags = tagTitle(toTagInput(p));
   return {
     ...toCore(p),
@@ -157,6 +175,7 @@ export function toCatalogItem(p: Parsed): CatalogItem {
     overview: truncate(p.overview, 170),
     runtime: p.runtime,
     ...(p.kind === 'tv' ? { seasons: p.seasons } : {}),
+    ...(p.kind === 'tv' && today && pickLatestSeason(p.seasonPremieres, today) ? { latestSeason: pickLatestSeason(p.seasonPremieres, today) } : {}),
     ...(p.certification ? { certification: p.certification } : {}),
     rating: p.rating,
     votes: p.votes,

@@ -5,7 +5,7 @@
  */
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import type { Catalog, CatalogItem, NewArrivals, ServiceId, TasteRef, TitleKind } from '../../src/contracts/catalog';
+import type { Catalog, CatalogItem, NewArrivals, ServiceId, TasteRef, TitleIndex, TitleKind } from '../../src/contracts/catalog';
 import { ALL_PROVIDER_IDS, SEED_FAVORITE_TITLES, SERVICES } from '../../src/contracts/catalog';
 import { fetchJsonOptional, TmdbClient } from './tmdb';
 import { DETAIL_APPEND_MOVIE, DETAIL_APPEND_TV, parseDetail, toCatalogItem, toCore, type Parsed } from './parse';
@@ -15,6 +15,8 @@ import { diffArrivals, prevFromPool, type Pool, type SeedInfo } from './diff';
 import { allSeedTitles, chooseSearchResult, SEED_IDS, type SeedTitle } from './seeds';
 import { countByDefaultService, validateCatalog, LIMITS } from './validate';
 import { isoDate, median, pMap, sleep } from './util';
+import { buildTitleIndex, titleListJobs, toListRow, trimIndexToBytes, validateTitleIndex, type ListRow } from './titles';
+import { findSpinoffs, KnownTitles, knownFromIndex } from './spinoff';
 
 // Derived from the repo owner so an account rename can't break the previous-build lookup.
 const SITE = process.env.SITE_URL ?? `https://${process.env.GITHUB_REPOSITORY_OWNER ?? 'harborpine'}.github.io/what-to-watch`;
@@ -227,6 +229,62 @@ function fixRuntime(show: CatalogItem, eps: RawEpisode[]): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// 5. Title name lookup (titles.json): list pages only, no per-title calls
+// ---------------------------------------------------------------------------
+
+async function fetchTitleRows(tmdb: TmdbClient): Promise<{ kind: TitleKind; row: ListRow }[]> {
+  const jobs = titleListJobs();
+  const rows: { kind: TitleKind; row: ListRow }[] = [];
+  const toFetch: typeof jobs = [];
+  let cachedJobs = 0;
+  for (const job of jobs) {
+    const cached = await readCache(path.join(CACHE_DIR, 'lists', `${job.name}-${job.pages}.json`), 4);
+    if (cached) {
+      cachedJobs++;
+      for (const row of cached as ListRow[]) rows.push({ kind: job.kind, row });
+    } else toFetch.push(job);
+  }
+  const perJob = new Map<string, ListRow[]>();
+  const failedJobs = new Set<string>();
+  const lastPage = new Map<string, number>();
+  const tasks = toFetch.flatMap((job) => Array.from({ length: job.pages }, (_, i) => ({ job, page: i + 1 })));
+  let failed = 0;
+  await pMap(
+    tasks,
+    async ({ job, page }) => {
+      if ((lastPage.get(job.name) ?? Infinity) < page) return;
+      try {
+        const res = await tmdb.get<any>(job.path, { ...job.params, page });
+        const total = Math.min(res.total_pages ?? 1, 500);
+        if (page >= total) lastPage.set(job.name, total);
+        const list = perJob.get(job.name) ?? [];
+        for (const r of res.results ?? []) {
+          const row = toListRow(job.kind, r);
+          if (row) list.push(row);
+        }
+        perJob.set(job.name, list);
+      } catch (e) {
+        failed++;
+        failedJobs.add(job.name);
+        if (failed <= 5) console.warn(`title list page failed (${job.name} p${page}): ${(e as Error).message}`);
+      }
+    },
+    14,
+  );
+  for (const job of toFetch) {
+    const list = perJob.get(job.name) ?? [];
+    for (const row of list) rows.push({ kind: job.kind, row });
+    if (!failedJobs.has(job.name) && list.length) await writeCache(path.join(CACHE_DIR, 'lists', `${job.name}-${job.pages}.json`), list);
+  }
+  log(`Title lists: ${jobs.length} jobs (${cachedJobs} from cache), ${tasks.length} pages requested, ${failed} failed; ${rows.length} rows`);
+  return rows;
+}
+
+function buildIndexFor(items: CatalogItem[], tasteRefs: TasteRef[], originals: Map<string, string>, listRows: { kind: TitleKind; row: ListRow }[]) {
+  return buildTitleIndex({ items, tasteRefs, originals, listRows });
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -323,7 +381,7 @@ async function main() {
     const lenient = p.genres.includes('reality') || p.genres.includes('talk');
     const ok = passesFloor({ kind: p.kind, votes: p.votes, rating: p.rating, genreIds: lenient ? [10764] : [], date: p.releaseDate, today });
     if (!ok && !isSeed) continue;
-    const item = toCatalogItem(p);
+    const item = toCatalogItem(p, today);
     items.push(item);
     info.set(item.id, { releaseDate: p.releaseDate, seasonPremieres: p.seasonPremieres });
     if (p.allKeywords.includes('anthology')) anthologyIds.add(item.id);
@@ -333,6 +391,29 @@ async function main() {
 
   let chosen = selectItems(items, { ...TARGET, mustKeep: seedOnService });
   await addStandouts(tmdb, chosen, anthologyIds, guessRuntime);
+
+  // Title name lookup rows (cached), then spinoff links (which use the lookup as their list of well-known shows)
+  const listRows = await fetchTitleRows(tmdb);
+  const originals = new Map<string, string>();
+  for (const [key, p] of parsedAll) if (p.originalTitle) originals.set(key, p.originalTitle);
+  const wideIndex = buildIndexFor(chosen, tasteRefs, originals, listRows);
+  const known = new KnownTitles(knownFromIndex(wideIndex));
+  const itemById = new Map(chosen.map((i) => [i.id, i]));
+  const children = chosen
+    .filter((i) => i.kind === 'tv')
+    .map((i) => ({ id: i.id, title: i.title, year: i.year, keywords: parsedAll.get(i.id)?.allKeywords ?? i.keywords, related: parsedAll.get(i.id)?.related ?? i.related }));
+  const spinLinks = findSpinoffs(children, known);
+  const label = (id: string) => {
+    const k = known.get(id);
+    return k ? `${k.title} (${k.year}) [${id}]` : `[${id}]`;
+  };
+  log(`
+SPINOFF LINKS (${spinLinks.length}):`);
+  for (const l of spinLinks) {
+    const c = itemById.get(l.childId)!;
+    c.spinoffOf = l.parentIds;
+    log(`  SPINOFF ${c.title} (${c.year}) [${c.id}] <- ${l.parentIds.map(label).join(' ; ')}   via ${l.via}`);
+  }
 
   // Assemble, trimming until under the size budget
   const assemble = (list: CatalogItem[]): Catalog => ({ schema: 1, builtAt, items: list, tasteRefs, seedFavorites });
@@ -349,9 +430,21 @@ async function main() {
   const prev = prevFromPool(prevPool, prevCatalog);
   const diff = diffArrivals({ items: chosen, prev, prevNew, today, builtAt, info });
 
+  // Title index for the final catalog
+  const protectedIds = new Set<string>([...chosen.map((i) => i.id), ...tasteRefs.map((r) => r.id)]);
+  const titleEntries = trimIndexToBytes(buildIndexFor(chosen, tasteRefs, originals, listRows), protectedIds, builtAt);
+  const titleIndex: TitleIndex = { schema: 1, builtAt, titles: titleEntries };
+  const titlesJson = JSON.stringify(titleIndex);
+  const titlesBytes = Buffer.byteLength(titlesJson);
+
   // Validate BEFORE writing anything
-  const problems = validateCatalog(catalog, bytes, prevCatalog?.items.length ?? null);
+  const problems = [...validateCatalog(catalog, bytes, prevCatalog?.items.length ?? null), ...validateTitleIndex(titleIndex, titlesBytes, [...protectedIds])];
   printSummary(catalog, diff, bytes, started, tmdb);
+  log(`titles.json: ${titleEntries.length} entries (${titleEntries.filter((t) => t.kind === 'tv').length} tv), ${titlesBytes} bytes (${(titlesBytes / 1_048_576).toFixed(2)} MB)`);
+  log(`latestSeason set on ${catalog.items.filter((i) => i.latestSeason).length} of ${catalog.items.filter((i) => i.kind === 'tv').length} TV items; spinoffOf on ${catalog.items.filter((i) => i.spinoffOf).length}`);
+  for (const probe of ['Breaking Bad', 'The Office', 'The Bear', 'Abbott Elementary']) {
+    for (const t of titleEntries.filter((x) => x.title === probe)) log(`  probe ${probe}: ${t.id} ${t.year} pop ${t.popularity}${catalog.items.find((i) => i.id === t.id) ? ' [in catalog] latestSeason=' + JSON.stringify(catalog.items.find((i) => i.id === t.id)!.latestSeason ?? null) : ''}`);
+  }
   if (problems.length) {
     console.error('\nCATALOG BUILD FAILED SANITY CHECKS:\n - ' + problems.join('\n - '));
     process.exit(1);

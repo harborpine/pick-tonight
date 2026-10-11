@@ -62,6 +62,7 @@ jobs:
             public/data/catalog.json
             public/data/new.json
             public/data/pool.json
+            public/data/titles.json
           if-no-files-found: error
           retention-days: 14
 
