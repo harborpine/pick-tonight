@@ -79,6 +79,12 @@ const ENGLISH_GROUPS = [['US'], ['GB', 'CA', 'AU', 'IE', 'NZ']];
 const JUNK = /\bseason\s*\d|\bseries\s*\d|\bworking\b|\btemp(orary)?\b|\bepisode\b|\bpromo\b|\bdvd\b|\bprovisional\b|\btbd\b/i;
 export const AKA_MAX = 5;
 
+/** Hand-checked names TMDB lacks (id -> US names). Only for shows people actually import. */
+export const EXTRA_AKA: Record<string, string[]> = {
+  // Channel 4 era of the show; US streaming calls both eras "The Great British Baking Show".
+  'tv-87012': ['The Great British Baking Show'],
+};
+
 export function isJunkName(name: string): boolean {
   const t = name.trim();
   return !t || t.length > 80 || JUNK.test(t);
@@ -157,7 +163,7 @@ export function buildTitleIndex(inp: IndexInputs): TitleIndexEntry[] {
   for (const r of inp.tasteRefs) put(fromCore(r, null, 0));
   for (const { kind, row } of inp.listRows) put(rowToEntry(kind, row));
   for (const [id, e] of byId) {
-    const aka = cleanAka(e.title, e.aka, inp.alternates?.get(id));
+    const aka = cleanAka(e.title, [...(e.aka ?? []), ...(EXTRA_AKA[id] ?? [])], inp.alternates?.get(id));
     const { aka: _old, ...rest } = e;
     void _old;
     byId.set(id, aka.length ? { ...rest, aka } : rest);
