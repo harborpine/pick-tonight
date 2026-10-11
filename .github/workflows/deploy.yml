@@ -1,0 +1,91 @@
+name: Build catalog and deploy
+
+# Rebuilds the streaming catalog from TMDB every morning (about 5 am US Eastern) and redeploys the site.
+# Also runs on every push to main and on demand (Actions tab -> Run workflow).
+on:
+  schedule:
+    - cron: '17 9 * * *'
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      actions: write # keep-alive step below
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      # Keeps GitHub from switching this daily schedule off after 60 quiet days:
+      # re-enabling a workflow through the API restarts GitHub's inactivity clock.
+      # Never fatal: the daily job matters more than this step.
+      - name: Keep the daily schedule alive
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/deploy.yml/enable"
+
+      # Season / episode lookups change slowly, so they are cached between runs.
+      - uses: actions/cache@v4
+        with:
+          path: .cache/catalog
+          key: catalog-episodes-${{ github.run_id }}
+          restore-keys: catalog-episodes-
+
+      - name: Build the catalog from TMDB
+        env:
+          TMDB_TOKEN: ${{ secrets.TMDB_TOKEN }}
+        run: npm run catalog
+
+      # A plain download for the team: the real catalog files.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: catalog-data
+          path: |
+            public/data/catalog.json
+            public/data/new.json
+            public/data/pool.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Test
+        run: npm test
+
+      - name: Build the site
+        run: npm run build
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
