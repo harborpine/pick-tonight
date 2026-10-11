@@ -253,3 +253,10 @@ describe('alternate names (aka)', () => {
     expect(idx.find((e) => e.id === 'tv-900')!.aka).toEqual(['Baking Show']);
   });
 });
+
+describe('hand-checked extra names', () => {
+  it('adds the Baking Show name to the Channel 4 listing', () => {
+    const idx = buildTitleIndex({ items: [], tasteRefs: [], listRows: [{ kind: 'tv', row: { id: 87012, title: 'The Great British Bake Off', original: 'The Great British Bake Off', date: '2017-08-29', genreIds: [], poster: null, popularity: 20 } }] });
+    expect(idx[0].aka).toEqual(['The Great British Baking Show']);
+  });
+});
