@@ -402,7 +402,9 @@ async function main() {
   const children = chosen
     .filter((i) => i.kind === 'tv')
     .map((i) => ({ id: i.id, title: i.title, year: i.year, keywords: parsedAll.get(i.id)?.allKeywords ?? i.keywords, related: parsedAll.get(i.id)?.related ?? i.related }));
-  const spinLinks = findSpinoffs(children, known);
+  const curatedNotes: string[] = [];
+  const spinLinks = findSpinoffs(children, known, 3, curatedNotes);
+  for (const n of curatedNotes) log(`  CURATED NOTE: ${n}`);
   const label = (id: string) => {
     const k = known.get(id);
     return k ? `${k.title} (${k.year}) [${id}]` : `[${id}]`;

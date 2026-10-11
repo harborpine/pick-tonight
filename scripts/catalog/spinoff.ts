@@ -100,8 +100,8 @@ export const CURATED: [Ref, Ref[]][] = [
   [['The Good Fight', 2017], [['The Good Wife', 2009]]],
   [['Elsbeth', 2024], [['The Good Wife', 2009]]],
   // reality
-  [['Love Island Games', 2023], [['Love Island', 2019], ['Love Island', 2015]]],
-  [['Love Island', 2019], [['Love Island', 2015]]],
+  [['Love Island Games', 2023], [['Love Island USA', 2019], ['Love Island', 2015]]],
+  [['Love Island USA', 2019], [['Love Island', 2015]]],
   [['Love Island Australia', 2018], [['Love Island', 2015]]],
   [['Winter House', 2021], [['Summer House', 2017]]],
   [["Summer House: Martha's Vineyard", 2022], [['Summer House', 2017]]],
@@ -125,7 +125,7 @@ export const CURATED: [Ref, Ref[]][] = [
   [['90210', 2008], [['Beverly Hills, 90210', 1990]]],
 ];
 
-export function curatedLinks(children: SpinoffChild[], known: KnownTitles): Map<string, string[]> {
+export function curatedLinks(children: SpinoffChild[], known: KnownTitles, notes: string[] = []): Map<string, string[]> {
   const out = new Map<string, string[]>();
   for (const [[ct, cy], parents] of CURATED) {
     const n = normTitle(ct);
@@ -135,6 +135,7 @@ export function curatedLinks(children: SpinoffChild[], known: KnownTitles): Map<
     for (const [pt, py] of parents) {
       const hit = known.find(pt, py)[0];
       if (hit) ids.push(hit.id);
+      else notes.push(`${kids[0].title} (${kids[0].year}) is in the catalog but its parent "${pt}"${py ? ` (${py})` : ''} was not found`);
     }
     for (const kid of kids) {
       const mine = ids.filter((id) => id !== kid.id);
@@ -151,9 +152,14 @@ export function curatedLinks(children: SpinoffChild[], known: KnownTitles): Map<
 /** Umbrella names that head many unrelated shows. */
 const UMBRELLAS = new Set([
   'star trek', 'star wars', 'marvel', 'marvels', 'dc', 'disney', 'nickelodeon', 'lego', 'the real housewives', 'real housewives',
-  'american horror', 'masters of horror', 'netflix', 'hbo', 'amazon', 'bbc', 'tales', 'doctor', 'inside', 'my', 'love', 'life', 'the', 'a',
+  'avengers', 'the avengers', 'x men', 'iron man', 'fantastic four', 'batman', 'spider man', 'superman', 'hulk', 'justice league', 'teen titans', 'transformers', 'power rangers', 'pokemon', 'dragon ball', 'american horror', 'masters of horror', 'netflix', 'hbo', 'amazon', 'bbc', 'tales', 'doctor', 'inside', 'my', 'love', 'life', 'the', 'a',
 ]);
-const SUBTITLE_NOT_A_SPINOFF = /^(season|series|part|volume|vol|book|chapter|episode|the complete|the movie|the series|the musical|the special)\b|^\d+$/i;
+const SUBTITLE_NOT_A_SPINOFF =
+  /^(season|series|part|volume|vol|book|chapter|episode|the complete|the movie|the series|the musical|the special|the official|the lost tapes|inside|beyond|behind|after ?show|reunion|reunited|making of|podcast|brotherhood|from|recap|extras?|uncut|unseen|unlocked|live)\b|^\d+$/i;
+/** International editions, not spinoffs. */
+const COUNTRY_SUBTITLE = /^(brazil|brasil|germany|france|italy|spain|japan|korea|uk|usa|us|asia|india|sweden|norway|denmark|finland|poland|netherlands|latino|latin america|canada|argentina|colombia|turkey|russia|china|thailand|philippines|vietnam)$/i;
+/** Individual false positives found by eyeballing build logs. */
+const NEVER_LINK = new Set<string>(['tv-279060', 'tv-31911']);
 
 const MIN_PARENT_POPULARITY = 10;
 
@@ -170,7 +176,7 @@ export function subtitleParent(child: SpinoffChild, known: KnownTitles): string 
   if (!m) return null;
   const [, head, sub] = m;
   const nh = normTitle(head);
-  if (!nh || UMBRELLAS.has(nh) || SUBTITLE_NOT_A_SPINOFF.test(sub.trim())) return null;
+  if (!nh || UMBRELLAS.has(nh) || SUBTITLE_NOT_A_SPINOFF.test(sub.trim()) || COUNTRY_SUBTITLE.test(sub.trim()) || NEVER_LINK.has(child.id)) return null;
   const parent = unambiguous(known.find(head).filter((k) => k.id !== child.id && k.year <= child.year));
   return parent ? parent.id : null;
 }
@@ -226,8 +232,8 @@ export interface SpinoffLink {
 }
 
 /** Computes links for the given TV children. `known` should hold every well-known TV title we have. */
-export function findSpinoffs(children: SpinoffChild[], known: KnownTitles, maxParents = 3): SpinoffLink[] {
-  const curated = curatedLinks(children, known);
+export function findSpinoffs(children: SpinoffChild[], known: KnownTitles, maxParents = 3, notes: string[] = []): SpinoffLink[] {
+  const curated = curatedLinks(children, known, notes);
   const links: SpinoffLink[] = [];
   for (const c of children) {
     const parents: string[] = [];

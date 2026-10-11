@@ -131,7 +131,7 @@ describe('spinoff links', () => {
     tv(6, 'Squid Game', 2021, 200),
     tv(7, 'Squid Game: The Challenge', 2023, 60),
     tv(8, 'Love Island', 2015, 80),
-    tv(9, 'Love Island', 2019, 70),
+    tv(9, 'Love Island USA', 2019, 70),
     tv(10, 'Love Island Games', 2023, 40),
     tv(11, 'Obscure', 2000, 1),
     tv(12, 'Obscure: Returns', 2010, 5),
@@ -155,7 +155,7 @@ describe('spinoff links', () => {
     expect(r['tv-3']).toEqual(['tv-1668']);
   });
   it('curated: parent year disambiguates same-named shows (Love Island)', () => {
-    const r = run([child('tv-10', 'Love Island Games', 2023), child('tv-9', 'Love Island', 2019)]);
+    const r = run([child('tv-10', 'Love Island Games', 2023), child('tv-9', 'Love Island USA', 2019)]);
     expect(r['tv-10']).toEqual(['tv-9', 'tv-8']);
     expect(r['tv-9']).toEqual(['tv-8']);
   });
@@ -179,6 +179,14 @@ describe('spinoff links', () => {
     expect(r['tv-14']).toBeUndefined();
     expect(r['tv-x2']).toBeUndefined(); // parent is newer than the child
     expect(r['tv-x3']).toEqual(['tv-15']); // single well-known "Dark": links
+  });
+  it('subtitle pattern: no link for behind-the-scenes extras, international editions and superhero heads', () => {
+    const k2 = new KnownTitles([tv(21, 'Cobra Kai', 2018, 90), tv(22, 'Too Hot to Handle', 2020, 60), tv(23, 'Batman', 1966, 40), tv(24, 'Narcos', 2015, 80)]);
+    const go = (title: string, year: number) => findSpinoffs([child('tv-z', title, year)], k2).map((l) => l.parentIds);
+    expect(go('Cobra Kai: Inside the Dojo', 2024)).toEqual([]);
+    expect(go('Too Hot to Handle: Brazil', 2021)).toEqual([]);
+    expect(go('Batman: The Animated Series', 1992)).toEqual([]);
+    expect(go('Narcos: Mexico', 2018)).toEqual([['tv-24']]);
   });
   it('keyword signal needs a spinoff keyword AND a recommended parent with shared franchise words', () => {
     const rel = ['tv-1402'];
