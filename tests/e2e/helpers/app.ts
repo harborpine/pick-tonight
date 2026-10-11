@@ -22,11 +22,14 @@ export interface StartOptions {
   /** 'skip' (default) taps Skip on the "what have you seen" grid, 'tick' ticks `tick` ids then Done, 'leave' leaves it open. */
   onboarding?: 'skip' | 'tick' | 'leave';
   tick?: string[];
+  /** Pretend "now" is this moment (ISO), so date-based rules (follow-ups: 60 days) do not drift as real time passes. */
+  now?: string;
 }
 
 /** Fresh single-device (memory) phone, ready on the Ask screen. */
 export async function startMemoryPhone(page: Page, opts: StartOptions = {}): Promise<void> {
   const person = opts.person ?? 'HG';
+  if (opts.now) await page.clock.setFixedTime(new Date(opts.now));
   await page.goto(MEM_URL);
   await tid(page, `person-${person}`).click();
   await tid(page, 'start-household').click();
@@ -46,7 +49,7 @@ export async function finishOnboarding(page: Page, opts: StartOptions = {}): Pro
   await expect(tid(page, 'ask')).toBeVisible();
 }
 
-export async function openTab(page: Page, tab: 'tonight' | 'new' | 'watchlist' | 'history' | 'us'): Promise<void> {
+export async function openTab(page: Page, tab: 'tonight' | 'new' | 'watchlist' | 'matches' | 'history' | 'us'): Promise<void> {
   await tid(page, `tab-${tab}`).click();
 }
 
@@ -119,7 +122,7 @@ export interface AskOptions {
   who?: Who;
   viewing?: 'focused' | 'background' | 'eating';
   mood?: string;
-  time?: 20 | 45 | 60 | 120;
+  time?: 20 | 45 | 60 | 120 | 'any';
   novelty?: 'new' | 'rewatch' | 'either';
   genre?: string | null;
 }
@@ -280,6 +283,27 @@ export async function wtw<T, A = undefined>(page: Page, fn: (w: any, arg: A) => 
   ) as Promise<T>;
 }
 
+/** Mark titles watched for a person through the sync layer (what "I watched this" does under the hood). */
+export async function markWatched(page: Page, person: Person, ids: string[], source: 'manual' | 'import' | 'onboarding' = 'manual', at?: number): Promise<void> {
+  await wtw(
+    page,
+    async (w, a) => {
+      const rows: Record<string, any> = {};
+      for (const i of w.catalog.items) rows[i.id] = i;
+      await w.sync.markWatched(
+        a.person,
+        a.ids.map((id: string) => ({
+          itemId: id,
+          source: a.source,
+          ...(a.at ? { at: a.at } : {}),
+          snapshot: { title: rows[id]?.title ?? id, year: rows[id]?.year ?? 2000, poster: null },
+        })),
+      );
+    },
+    { person, ids, source, at },
+  );
+}
+
 export async function sharedState(page: Page): Promise<any> {
   return wtw(page, (w) => JSON.parse(JSON.stringify(w.sync.getState())));
 }
@@ -316,7 +340,7 @@ export interface Req {
   who: Who;
   viewing: 'focused' | 'background' | 'eating';
   mood: string;
-  time: 20 | 45 | 60 | 120;
+  time: 20 | 45 | 60 | 120 | 'any';
   novelty: 'new' | 'rewatch' | 'either';
   genre: string | null;
 }

@@ -23,7 +23,7 @@ test('reload mid-deck: still signed in, back on the questions, earlier answers r
 
 test('reload on every tab keeps the household', async ({ page }) => {
   await startMemoryPhone(page);
-  for (const t of ['new', 'watchlist', 'history', 'us'] as const) {
+  for (const t of ['new', 'watchlist', 'matches', 'history', 'us'] as const) {
     await openTab(page, t);
     await page.reload();
     await expect(tid(page, 'tabbar')).toBeVisible();

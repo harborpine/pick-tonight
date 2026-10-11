@@ -3,18 +3,18 @@
  * implementations. Firebase runs it inside a transaction so a race between two
  * phones still yields exactly one match.
  */
-import type { HistoryEntry, PersonId, TitleSnapshot, TogetherSession } from '../contracts';
+import type { PickEntry, PersonId, TitleSnapshot, TogetherSession } from '../contracts';
 
 export interface SwipeDecision {
   /** The session after the swipe (a new object; the input is not changed). */
   session: TogetherSession;
   /** True iff this swipe created the match. */
   matched: boolean;
-  /** The history entry to write when matched. */
-  history: HistoryEntry | null;
+  /** The pick entry to write when matched. */
+  pick: PickEntry | null;
 }
 
-export const matchHistoryId = (sessionId: string, itemId: string): string => `match-${sessionId}-${itemId}`;
+export const matchPickId = (sessionId: string, itemId: string): string => `match-${sessionId}-${itemId}`;
 
 export const otherPerson = (p: PersonId): PersonId => (p === 'HG' ? 'BG' : 'HG');
 
@@ -40,8 +40,8 @@ export function decideSwipe(
   const card = session.deck.find((c) => c.itemId === itemId);
   if (yes && !alreadyMatched && card && session.yes[other].includes(itemId)) {
     session.matches.push({ itemId, at: now });
-    const history: HistoryEntry = {
-      id: matchHistoryId(session.id, itemId),
+    const pick: PickEntry = {
+      id: matchPickId(session.id, itemId),
       at: now,
       kind: 'match',
       who: 'Together',
@@ -51,7 +51,10 @@ export function decideSwipe(
       service: card.service,
       sessionId: session.id,
     };
-    return { session, matched: true, history };
+    return { session, matched: true, pick };
   }
-  return { session, matched: false, history: null };
+  return { session, matched: false, pick: null };
 }
+
+/** Solo picks get a fixed id, so two phones adding the same title at once still make one entry. */
+export const soloPickId = (who: string, itemId: string): string => `solo-${who}-${itemId}`;

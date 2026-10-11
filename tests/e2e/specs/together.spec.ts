@@ -22,7 +22,7 @@ async function expectMatchScreen(page: Page, id: string) {
   await expect(tid(page, 'match-ad-badge')).toHaveText(/ad-free|ads/i);
 }
 
-test('two phones: Together session, both say yes, match on both, keep swiping, second match, both in History', async ({ pair: { A, B } }) => {
+test('two phones: Together session, both say yes, match on both, keep swiping, second match, both in Matches (not History)', async ({ pair: { A, B } }) => {
   {
     // --- HG starts a Together session --------------------------------------------------
     await fillAsk(A, { who: 'Together', viewing: 'focused', mood: 'laugh', time: 120, novelty: 'either' });
@@ -76,19 +76,21 @@ test('two phones: Together session, both say yes, match on both, keep swiping, s
     await tid(A, 'match-keep').click();
     await tid(B, 'match-keep').click();
 
-    // --- both History tabs list both matches as match entries --------------------------
+    // --- both Matches tabs list both matches as match entries; History stays free of them --
     for (const page of [A, B]) {
-      await openTab(page, 'history');
-      await expect(tid(page, 'history')).toBeVisible();
+      await openTab(page, 'matches');
+      await expect(tid(page, 'matches')).toBeVisible();
       for (const id of [first, second]) {
-        const row = page.locator(`[data-testid="history-row"][data-item-id="${id}"]`);
+        const row = page.locator(`[data-testid="match-row"][data-item-id="${id}"]`);
         await expect(row).toHaveCount(1, { timeout: 45_000 });
         await expect(row).toHaveAttribute('data-kind', 'match');
-        await expect(row.getByTestId('history-who')).toHaveText('HG & BG');
-        await expect(row.getByTestId('history-where')).not.toHaveText('');
-        await expect(row.getByTestId('history-ad-badge')).toHaveText(/ad-free|ads/i);
+        await expect(row.getByTestId('match-label')).toHaveText(/Match/);
+        await expect(row.getByTestId('match-where')).not.toHaveText('');
+        await expect(row.getByTestId('match-ad-badge')).toHaveText(/ad-free|ads/i);
       }
-      await expect(page.getByTestId('history-row')).toHaveCount(2);
+      await expect(page.getByTestId('match-row')).toHaveCount(2);
+      await openTab(page, 'history');
+      await expect(page.getByTestId('history-row')).toHaveCount(0);
     }
   }
 });
@@ -109,7 +111,7 @@ test('two phones: one person says no, the other yes -> no match; ending the sess
     await expect(tid(A, 'match-screen')).toHaveCount(0);
     await expect(tid(B, 'match-screen')).toHaveCount(0);
     const s = await sharedState(A);
-    expect(s.history.filter((h: { itemId: string }) => h.itemId === id)).toHaveLength(0);
+    expect(s.picks.filter((h: { itemId: string }) => h.itemId === id)).toHaveLength(0);
 
     // End from HG's phone: BG is told and returns to the questions.
     await tid(A, 'session-end-top').click();

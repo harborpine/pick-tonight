@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
-import { watchers, type CatalogItem, type DeckCard, type TogetherSession } from '../contracts';
+import type { CatalogItem, DeckCard, TogetherSession } from '../contracts';
 import { AdBadge, Poster } from './components';
-import { useApp, type PickInfo } from './context';
+import { useApp } from './context';
 import { moodLabel, pickText, serviceName, timeLabel } from './helpers';
 
 // ---------------------------------------------------------------------------
@@ -41,53 +41,6 @@ export function JoinCard({ session, inline, onDismiss }: { session: TogetherSess
             Not now
           </button>
         )}
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// "Tonight you're watching…" (solo pick)
-// ---------------------------------------------------------------------------
-
-export function PickScreen({ info, onKeep, onDone }: { info: PickInfo; onKeep: () => void; onDone: () => void }) {
-  const { services, toast } = useApp();
-  const { item, pick, service, who } = info;
-  const [marked, setMarked] = useState(false);
-  const markSeen = async () => {
-    try {
-      for (const p of watchers(who)) await services.sync.setSeen(p, [item.id], true);
-      setMarked(true);
-    } catch {
-      toast('Could not save that. Please try again.');
-    }
-  };
-  return (
-    <div className="overlay pick" data-testid="pick-screen" data-item-id={item.id}>
-      <div className="pick-inner">
-        <p className="eyebrow">Tonight you&rsquo;re watching{'…'}</p>
-        <Poster title={item.title} year={item.year} poster={item.poster} size="w500" className="pick-poster" />
-        <h1 className="pick-title" data-testid="pick-title">{item.title}</h1>
-        <p className="pick-what" data-testid="pick-what">{pickText(pick)}</p>
-        <p className="pick-where">
-          <span>on </span>
-          <strong data-testid="pick-service">{serviceName(service.serviceId)}</strong>
-          <AdBadge service={service} testId="pick-ad-badge" />
-        </p>
-        <p className="pick-meta">{item.year}</p>
-      </div>
-      <div className="overlay-actions">
-        <button type="button" className="btn btn-primary btn-lg" data-testid="pick-done" onClick={onDone}>
-          Done
-        </button>
-        <div className="two">
-          <button type="button" className="btn btn-ghost" data-testid="pick-seen" disabled={marked} onClick={markSeen}>
-            {marked ? 'Marked as seen' : 'Mark as seen'}
-          </button>
-          <button type="button" className="btn btn-ghost" data-testid="pick-keep" onClick={onKeep}>
-            Keep browsing
-          </button>
-        </div>
       </div>
     </div>
   );

@@ -19,7 +19,7 @@
  */
 import type { Catalog, CatalogItem, GenreId, PersonId, Profile, SwipeAction, TasteWeights } from '../contracts';
 import { getIndex, nichesOf, traitsOf } from './catalogIndex';
-import { getFavModel, emptyTaste } from './taste';
+import { getFavModel, emptyTaste, isImportKey } from './taste';
 import { clamp, round4 } from './util';
 
 /** Signed learning rate per action. */
@@ -68,6 +68,8 @@ function nudge(map: Record<string, number>, key: string, rate: number): void {
 
 function fade(map: Record<string, number>): void {
   for (const k of Object.keys(map)) {
+    // What a watch-history import taught is a record of what they watched, not a swipe habit: it does not fade.
+    if (isImportKey(k)) continue;
     const v = map[k] * DECAY;
     if (Math.abs(v) < FORGET_BELOW || !Number.isFinite(v)) delete map[k];
     else map[k] = v;
@@ -123,6 +125,8 @@ export function learnFromSwipe(profile: Profile, item: CatalogItem, action: Swip
   tidy(taste.traits);
   return next;
 }
+
+export { copyTaste };
 
 export function correctTaste(profile: Profile, insightKey: string, correction: 'more' | 'less' | null): Profile {
   const taste = copyTaste(profile.taste);

@@ -313,11 +313,27 @@ export function explainTaste(catalog: Catalog, favorites: readonly string[], ite
 // Learned weights and manual corrections
 // ---------------------------------------------------------------------------
 
+/**
+ * WHERE LEARNED WEIGHTS LIVE. Swipes write to taste.genres / taste.keywords /
+ * taste.traits. A watch-history import writes to its own namespace, stored
+ * inside taste.traits under these prefixes ('imp:g:comedy', 'imp:k:sitcom',
+ * 'imp:t:dropIn'), so the two kinds of evidence never overwrite each other and
+ * an import can be re-run without piling up (see history/learnImport.ts).
+ * Scoring reads the two added together.
+ */
+export const IMPORT_GENRE = 'imp:g:';
+export const IMPORT_KEYWORD = 'imp:k:';
+export const IMPORT_TRAIT = 'imp:t:';
+export const isImportKey = (key: string): boolean => key.startsWith('imp:');
+
 export interface LearnedView {
   empty: boolean;
+  /** Swipes + watch history (or the manual correction, which outranks both). */
   genre(g: GenreId): number;
   keyword(k: string): number;
   trait(t: string): number;
+  /** The watch-history part on its own (0 when none), so wording can say where an opinion came from. */
+  imported: { genre(g: string): number; keyword(k: string): number; trait(t: string): number };
   /** Corrections by kind, so scoring can apply their direct boost. */
   corrected: { genres: Map<string, number>; keywords: Map<string, number>; traits: Map<string, number> };
   hasCorrections: boolean;
@@ -345,11 +361,26 @@ export function learnedView(taste: TasteWeights | undefined): LearnedView {
   }
   const hasCorrections = corrected.genres.size + corrected.keywords.size + corrected.traits.size > 0;
   const hasLearned = Object.keys(genres).length + Object.keys(keywords).length + Object.keys(traits).length > 0;
+  // The watch-history namespace, split out once so the per-title lookups stay cheap.
+  const impG = new Map<string, number>();
+  const impK = new Map<string, number>();
+  const impT = new Map<string, number>();
+  for (const key of Object.keys(traits)) {
+    if (!isImportKey(key)) continue;
+    const v = traits[key];
+    if (typeof v !== 'number' || !Number.isFinite(v)) continue;
+    if (key.startsWith(IMPORT_GENRE)) impG.set(key.slice(IMPORT_GENRE.length), v);
+    else if (key.startsWith(IMPORT_KEYWORD)) impK.set(key.slice(IMPORT_KEYWORD.length), v);
+    else if (key.startsWith(IMPORT_TRAIT)) impT.set(key.slice(IMPORT_TRAIT.length), v);
+  }
+  const own = (map: Record<string, number>, k: string) => (Object.prototype.hasOwnProperty.call(map, k) ? map[k] : 0);
+  const sum = (a: number, b: number | undefined) => (b === undefined ? a : clamp(a + b, -1, 1));
   return {
     empty: !hasCorrections && !hasLearned,
-    genre: (g) => corrected.genres.get(g) ?? (genres as Record<string, number>)[g] ?? 0,
-    keyword: (k) => corrected.keywords.get(k) ?? (Object.prototype.hasOwnProperty.call(keywords, k) ? keywords[k] : 0),
-    trait: (t) => corrected.traits.get(t) ?? (Object.prototype.hasOwnProperty.call(traits, t) ? traits[t] : 0),
+    genre: (g) => corrected.genres.get(g) ?? sum(own(genres as Record<string, number>, g), impG.get(g)),
+    keyword: (k) => corrected.keywords.get(k) ?? sum(own(keywords, k), impK.get(k)),
+    trait: (t) => corrected.traits.get(t) ?? sum(own(traits, t), impT.get(t)),
+    imported: { genre: (g) => impG.get(g) ?? 0, keyword: (k) => impK.get(k) ?? 0, trait: (t) => impT.get(t) ?? 0 },
     corrected,
     hasCorrections,
   };

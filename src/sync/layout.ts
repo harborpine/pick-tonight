@@ -1,10 +1,12 @@
 /** Where things live in Firestore (see README.md) plus the shapes stored there. */
-import type { HistoryEntry, PersonId, Profile, Settings, TogetherSession, WatchlistEntry } from '../contracts';
+import type { PickEntry, PersonId, Profile, Settings, TogetherSession, WatchlistEntry } from '../contracts';
 
 export const PATHS = {
   household: (hid: string) => `households/${hid}`,
   shared: (hid: string) => `households/${hid}/data/shared`,
   seen: (hid: string, p: PersonId) => `households/${hid}/data/seen_${p}`,
+  seenDetails: (hid: string) => `households/${hid}/seenx`,
+  seenShard: (hid: string, docId: string) => `households/${hid}/seenx/${docId}`,
   months: (hid: string) => `households/${hid}/months`,
   month: (hid: string, month: string) => `households/${hid}/months/${month}`,
   sessions: (hid: string) => `households/${hid}/sessions`,
@@ -12,10 +14,6 @@ export const PATHS = {
   code: (code: string) => `pairingCodes/${code}`,
 };
 
-/** Newest entries kept in SharedState.history. */
-export const HISTORY_CAP = 300;
-/** How many monthly history documents the live listener covers. */
-export const HISTORY_MONTHS_LISTENED = 12;
 /** Most cards one Together deck may hold (keeps the session doc far under 1 MB). */
 export const MAX_DECK_CARDS = 400;
 /** Device slots per household (re-pairing after an iOS storage wipe uses a new slot). */
@@ -33,9 +31,15 @@ export interface SharedDoc {
   watchlist?: Record<string, WatchlistEntry>;
 }
 
+/** seenx/{HG_0..HG_7, BG_0..BG_7}: per-title details of watched titles. e.{itemId} = JSON string of a SeenEntry. */
+export interface SeenShardDoc {
+  e?: Record<string, string>;
+}
+
 /** months/{YYYY-MM} document. */
 export interface MonthDoc {
-  entries?: Record<string, HistoryEntry>;
+  /** The pick log (called `history` by the first app version; same documents). */
+  entries?: Record<string, PickEntry>;
 }
 
 export const watchKey = (list: string, itemId: string): string => `${list}__${itemId}`;

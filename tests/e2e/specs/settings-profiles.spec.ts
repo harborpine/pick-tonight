@@ -69,8 +69,12 @@ test('settings: "Not subscribed" removes a service; titles move to another servi
   expect(deck.filter((c) => c.service === 'Netflix')).toEqual([]);
   // Netflix exclusives are gone (Disenchantment: Netflix only)...
   expect(deck.map((c) => c.id)).not.toContain('tv-73021');
-  // ...and HIMYM falls back to Hulu with ads
-  const himym = deck.find((c) => c.id === 'tv-1100');
+  // ...and HIMYM falls back to Hulu with ads (v2: it is a seen favourite, so ask for Rewatch to be sure it is in the deck)
+  await tid(page, 'empty-back').click();
+  await askSolo(page, { novelty: 'rewatch' });
+  const rew = await pageThroughDeck(page);
+  expect(rew.filter((c) => c.service === 'Netflix')).toEqual([]);
+  const himym = rew.find((c) => c.id === 'tv-1100');
   expect(himym).toBeTruthy();
   expect([himym!.service, himym!.adFree]).toEqual(['Hulu', false]);
 });

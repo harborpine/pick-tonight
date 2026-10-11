@@ -4,6 +4,7 @@ import {
   askSolo,
   expectInViewport,
   expectNoHorizontalScroll,
+  markWatched,
   openTab,
   saveCard,
   startMemoryPhone,
@@ -111,16 +112,15 @@ test('layout: every main screen fits an iPhone (no sideways scrolling, tab bar a
   await shot(page, '09-never-sheet');
   await tid(page, 'never-cancel').click();
 
-  // --- pick screen
+  // --- a solo yes: no overlay, the deck carries on with a Liked chip that fits the screen
   await tid(page, 'action-yes').click();
-  await expect(tid(page, 'pick-screen')).toBeVisible();
-  await page.waitForTimeout(900); // fade-in
+  await expect(tid(page, 'pick-screen')).toHaveCount(0);
+  await expect(tid(page, 'liked-chip')).toBeVisible();
   await expectNoHorizontalScroll(page);
-  await expectInViewport(page, tid(page, 'pick-done'), 'pick Done');
-  await expectInViewport(page, tid(page, 'pick-keep'), 'pick Keep browsing');
-  await expectInViewport(page, tid(page, 'pick-title'), 'pick title');
-  await shot(page, '10-pick');
-  await tid(page, 'pick-done').click();
+  await expectInViewport(page, tid(page, 'liked-chip'), 'Liked chip');
+  await expectInViewport(page, tid(page, 'card'), 'next card');
+  await shot(page, '10-after-yes');
+  await tid(page, 'deck-back').click();
 
   // --- watchlist (with something in it), history, new, us
   await askSolo(page, { who: 'HG', mood: 'cozy', time: 120 });
@@ -129,6 +129,11 @@ test('layout: every main screen fits an iPhone (no sideways scrolling, tab bar a
   await expect(tid(page, 'watchlist-row').first()).toBeVisible();
   await expectNoHorizontalScroll(page);
   await shot(page, '11-watchlist');
+  await openTab(page, 'matches');
+  await expect(tid(page, 'match-row').first()).toBeVisible();
+  await expectNoHorizontalScroll(page);
+  await shot(page, '11b-matches');
+  await markWatched(page, 'HG', ['tv-8592', 'tv-48891']);
   await openTab(page, 'history');
   await expect(tid(page, 'history-row').first()).toBeVisible();
   await expectNoHorizontalScroll(page);
@@ -154,7 +159,7 @@ test('layout: every main screen fits an iPhone (no sideways scrolling, tab bar a
   await shot(page, '18-settings-about');
 
   // tab bar stays put on every tab
-  for (const t of ['tonight', 'new', 'watchlist', 'history', 'us'] as const) {
+  for (const t of ['tonight', 'new', 'watchlist', 'matches', 'history', 'us'] as const) {
     await openTab(page, t);
     await expectInViewport(page, tid(page, 'tabbar'), `tab bar on ${t}`);
     await expectNoHorizontalScroll(page);

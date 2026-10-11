@@ -1,10 +1,14 @@
 /** Builds one SharedState from the handful of Firestore documents (pure). */
-import { DEFAULT_PLANS, type HistoryEntry, type PersonId, type Profile, type SharedState, type TogetherSession } from '../contracts';
-import { HISTORY_CAP, type MonthDoc, type SharedDoc } from './layout';
+import { DEFAULT_PLANS, type PersonId, type PickEntry, type Profile, type SharedState, type TogetherSession } from '../contracts';
+import type { MonthDoc, SharedDoc } from './layout';
+import { normalizeSeen } from './seen';
 
 export interface RawParts {
   shared: SharedDoc | null;
-  seen: Record<PersonId, Record<string, number>>;
+  /** The legacy per-person map from data/seen_{P}.m: itemId -> ms (older data may be any shape; see normalizeSeen). */
+  seen: Record<PersonId, Record<string, unknown>>;
+  /** Details from the seenx shards, merged per person: itemId -> JSON string. Absent for old households. */
+  seenDetails?: Record<PersonId, Record<string, string>>;
   /** month id (YYYY-MM) -> document */
   months: Record<string, MonthDoc>;
   /** every session document with status 'open' */
@@ -32,9 +36,10 @@ const emptyProfile = (id: PersonId): Profile => ({
 
 export function assembleState(parts: RawParts): SharedState {
   const sh = parts.shared ?? {};
-  const history: HistoryEntry[] = [];
-  for (const m of Object.values(parts.months)) history.push(...Object.values(m.entries ?? {}));
-  history.sort((a, b) => b.at - a.at || (a.id < b.id ? 1 : -1));
+  // Every pick in every month document: nothing is cut off (the list is small because people remove picks).
+  const picks: PickEntry[] = [];
+  for (const m of Object.values(parts.months)) picks.push(...Object.values(m.entries ?? {}));
+  picks.sort((a, b) => b.at - a.at || (a.id < b.id ? 1 : -1));
 
   const open = parts.sessions
     .filter((s) => s.status === 'open')
@@ -45,11 +50,14 @@ export function assembleState(parts: RawParts): SharedState {
       HG: sh.profiles?.HG ?? emptyProfile('HG'),
       BG: sh.profiles?.BG ?? emptyProfile('BG'),
     },
-    seen: { HG: { ...parts.seen.HG }, BG: { ...parts.seen.BG } },
+    seen: {
+      HG: normalizeSeen(parts.seen.HG, parts.seenDetails?.HG),
+      BG: normalizeSeen(parts.seen.BG, parts.seenDetails?.BG),
+    },
     never: { HG: { ...sh.never?.HG }, BG: { ...sh.never?.BG } },
     notTonight: { HG: { ...sh.notTonight?.HG }, BG: { ...sh.notTonight?.BG } },
     watchlist: Object.values(sh.watchlist ?? {}).sort((a, b) => b.at - a.at),
-    history: history.slice(0, HISTORY_CAP),
+    picks,
     settings: sh.settings ?? { plans: { ...DEFAULT_PLANS } },
     activeSession: open[0] ? normalizeSession(open[0]) : null,
   };

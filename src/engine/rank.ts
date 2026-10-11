@@ -30,11 +30,18 @@
  * with few matches still gives something to swipe.
  *
  * Variety: the final order is built greedily, nudging down a title that is
- * very like the few just before it (same genres / format / service / related),
- * and capping how much of an "either" deck is things they've already seen.
+ * very like the few just before it (same genres / format / service / related).
  * A non-zero seed adds a small deterministic shuffle among near-equal scores.
+ *
+ * New / rewatch / either: "new" and "rewatch" are hard rules (rules.ts).
+ * "Either" leans new: the deck is the NEW deck with about one card in ten
+ * (EITHER_REWATCH_SHARE) given to a good rewatch — see dealEither.
+ *
+ * Time "any": no limit and no opinion about length (every title gets the same
+ * length credit), unlike "2+ hrs", which favours things that use the evening.
  */
 import {
+  EITHER_REWATCH_SHARE,
   GENRES,
   TIME_LIMIT_MINUTES,
   watchers,
@@ -60,6 +67,7 @@ import {
   hitsDealbreaker,
   isNeverHidden,
   isNotTonight,
+  pickedIds,
   pickFor,
   scaredOffered,
   type PickResult,
@@ -102,6 +110,27 @@ const MOOD_NOTHING = 0.2;
 /** Size of the random nudge a non-zero seed adds. */
 const SEED_JITTER = 0.045;
 const DEFAULT_LIMIT = 30;
+/** Time "any": the same length credit for everything, so length cannot affect the order. */
+const ANY_LENGTH_FIT = 0.8;
+
+// ---- "either": the lean towards new ----------------------------------------
+/** One rewatch slot per this many cards (10 for a share of 0.1). */
+const REWATCH_EVERY = Math.max(2, Math.round(1 / EITHER_REWATCH_SHARE));
+/** Where in each run of REWATCH_EVERY cards the rewatch may sit (0-based): never the first two, never the last. */
+const REWATCH_SLOT_FROM = 2;
+const REWATCH_SLOT_TO = REWATCH_EVERY - 2;
+const REWATCH_SLOT_DEFAULT = Math.min(REWATCH_SLOT_TO, 4);
+/**
+ * A rewatch is only dealt if the title is GOOD for this request: judged as if
+ * it were new (taste, mood, quality, length — everything but the fact that
+ * they've seen it), it must score at least as well as the REWATCH_BAR_DEPTH-th
+ * best new title (the kind of title that would be in the first couple of
+ * decks anyway), give or take REWATCH_SLACK.
+ */
+const REWATCH_BAR_DEPTH = 60;
+const REWATCH_SLACK = 0.03;
+/** With a seed, which of the good rewatches get the slots rotates by about this much score. */
+const REWATCH_JITTER = 0.12;
 
 /**
  * When a title has nothing for the requested mood, a neighbouring mood earns
@@ -189,6 +218,7 @@ function moodFit(item: CatalogItem, mood: MoodId): { raw: number; near: number; 
  * sitcom is a fine-not-ideal answer to "2+ hrs", where films fit best.
  */
 function lengthFit(item: CatalogItem, minutes: number, req: SuggestRequest): number {
+  if (req.time === 'any') return ANY_LENGTH_FIT; // "I don't care": no preference at all
   const target = req.time === 120 ? 100 : req.time === 20 ? 21 : req.time;
   const single = Math.min(1, minutes / target);
   let fit = single;
@@ -217,10 +247,11 @@ function formatFit(item: CatalogItem, req: SuggestRequest): number {
 }
 
 /**
- * "Either": mixing new and seen. New is the baseline. Something already seen
- * is marked down — heavily for a story you'd be repeating, lightly for a
- * drop-in show — except in comfort moods (cozy, brain-off, laugh, feel-good)
- * where an old favourite is a great answer.
+ * How good a REWATCH something already seen makes, as a score adjustment.
+ * "Either": used to choose and to vet the roughly-one-in-ten rewatch cards.
+ * A story you'd be repeating is marked down heavily, a drop-in show lightly —
+ * except in comfort moods (cozy, brain-off, laugh, feel-good), where an old
+ * favourite is a great answer.
  * "Rewatch": favourites and drop-in shows rewatch best.
  */
 function noveltyAdjust(item: CatalogItem, seen: boolean, isFav: boolean, req: SuggestRequest): number {
@@ -236,13 +267,13 @@ function noveltyAdjust(item: CatalogItem, seen: boolean, isFav: boolean, req: Su
 // Per-person scoring
 // ---------------------------------------------------------------------------
 
-interface PersonCtx {
+export interface PersonCtx {
   person: PersonId;
   fav: FavModel;
   view: LearnedView;
 }
 
-function personCtx(person: PersonId, ctx: EngineContext): PersonCtx {
+export function personCtx(person: PersonId, ctx: EngineContext): PersonCtx {
   const profile = ctx.state.profiles?.[person];
   return { person, fav: getFavModel(ctx.catalog, profile?.favorites), view: learnedView(profile?.taste) };
 }
@@ -290,7 +321,7 @@ interface ReasonInput {
   moodRaw: number;
 }
 
-function buildReasons({ info, people, req, pick, moodRaw }: ReasonInput): string[] {
+export function buildReasons({ info, people, req, pick, moodRaw }: ReasonInput): string[] {
   const item = info.item;
   const out: { text: string; w: number }[] = [];
   const solo = people.length === 1;
@@ -333,7 +364,9 @@ function buildReasons({ info, people, req, pick, moodRaw }: ReasonInput): string
     for (const g of item.genres) {
       if (p.view.corrected.genres.get(g) === 1) out.push({ text: `You asked for more ${GENRE_NOUNS[g]}`, w: 0.8 });
       else if (solo && !p.view.corrected.genres.has(g) && p.view.genre(g) >= 0.25) {
-        out.push({ text: `You've been saying yes to ${GENRE_NOUNS[g]}`, w: 0.5 + 0.3 * p.view.genre(g) });
+        // Say where the opinion came from: their watch history, or their swipes.
+        const fromHistory = p.view.imported.genre(g) > p.view.genre(g) / 2;
+        out.push({ text: `${fromHistory ? 'You watch a lot of' : "You've been saying yes to"} ${GENRE_NOUNS[g]}`, w: 0.5 + 0.3 * p.view.genre(g) });
       }
     }
   }
@@ -371,6 +404,8 @@ interface Candidate {
   service: ServiceChoice;
   pick: PickResult;
   score: number;
+  /** The score with no allowance for having seen it: how good the title is for this request in itself. */
+  merit: number;
   moodRaw: number;
   moodEff: number;
   seen: boolean;
@@ -390,6 +425,7 @@ export function buildDeck(req: SuggestRequest, ctx: EngineContext, opts: DeckOpt
   const people = watchers(who).map((p) => personCtx(p, ctx));
   const plans = ctx.state.settings?.plans;
   const timeLimit = TIME_LIMIT_MINUTES[req.time] ?? 0;
+  const picked = pickedIds(who, ctx);
 
   const cands: Candidate[] = [];
   let goodMood = 0;
@@ -404,6 +440,7 @@ export function buildDeck(req: SuggestRequest, ctx: EngineContext, opts: DeckOpt
     if (hitsDealbreaker(item, who, ctx)) continue; // rule 2
     if (isNeverHidden(id, who, ctx)) continue; // rule 7
     if (isNotTonight(id, who, ctx)) continue;
+    if (picked.has(id)) continue; // already on the Matches tab
     const seenFlags = people.map((p) => hasSeen(p.person, id, ctx));
     const seenAny = seenFlags.includes(true);
     if (req.novelty === 'new' && seenAny) continue; // rule 5
@@ -418,35 +455,37 @@ export function buildDeck(req: SuggestRequest, ctx: EngineContext, opts: DeckOpt
     const shared =
       W_QUALITY * info.quality + W_POP * info.pop + W_LENGTH * lengthFit(item, pick.minutes, req) + W_FORMAT * formatFit(item, req);
     const moodMul = MOOD_FLOOR + (1 - MOOD_FLOOR) * mood.eff;
+    const plain: number[] = [];
     const scores = people.map((p, k) => {
       const t = tasteParts(info, p, index);
       const base = W_TASTE * t.taste + W_SHAPE * t.shape + W_LEARN * t.learned + shared;
-      return base * moodMul + W_MOOD * mood.eff + t.corr + noveltyAdjust(item, seenFlags[k], t.isFav, req);
+      plain.push(base * moodMul + W_MOOD * mood.eff + t.corr);
+      return plain[k] + noveltyAdjust(item, seenFlags[k], t.isFav, req);
     });
-    let score = blend(scores);
-    if (seed !== 0) score += (hash01(seed, id) - 0.5) * SEED_JITTER;
+    const jitter = seed !== 0 ? (hash01(seed, id) - 0.5) * SEED_JITTER : 0;
+    const score = blend(scores) + jitter;
+    const merit = seenAny ? blend(plain) + jitter : score;
 
     const craved = !!req.genre && item.genres.includes(req.genre);
     if (mood.raw >= MOOD_GOOD) {
       goodMood++;
       if (craved) goodMoodCraved++;
     }
-    cands.push({ info, service, pick, score, moodRaw: mood.raw, moodEff: mood.near, seen: seenAny, craved });
+    cands.push({ info, service, pick, score, merit, moodRaw: mood.raw, moodEff: mood.near, seen: seenAny, craved });
   }
 
   const byScore = (a: Candidate, b: Candidate) => b.score - a.score || (a.info.item.id < b.info.item.id ? -1 : 1);
-  const comfort = COMFORT_MOODS.has(req.mood);
-  // "Either" decks: at most about a third already-seen (half in comfort moods).
-  const seenCap = req.novelty === 'either' ? (comfort ? 0.5 : 0.34) : 1;
+  const deal = (sorted: Candidate[], max: number, startAt: number): Candidate[] =>
+    req.novelty === 'either' ? dealEither(sorted, max, startAt, seed, index) : diversify(sorted, max, index);
 
   let ordered: Candidate[];
   if (req.genre) {
     // Craving: matching titles first, always. The rest only fill what's left.
     const yes = cands.filter((c) => c.craved);
     const no = cands.filter((c) => !c.craved);
-    const first = diversify(oneEach(dropPoorMood(yes, goodMoodCraved, req.mood).sort(byScore)), limit, seenCap, index);
+    const first = deal(oneEach(dropPoorMood(yes, goodMoodCraved, req.mood).sort(byScore)), limit, 0);
     const rest =
-      first.length < limit ? diversify(oneEach(dropPoorMood(no, goodMood, req.mood).sort(byScore)), limit - first.length, seenCap, index) : [];
+      first.length < limit ? deal(oneEach(dropPoorMood(no, goodMood, req.mood).sort(byScore)), limit - first.length, first.length) : [];
     // Keep reported scores honest about the tiers: fillers always score below matches.
     if (first.length && rest.length) {
       const floor = Math.min(...first.map((c) => c.score)) - 0.02;
@@ -455,7 +494,7 @@ export function buildDeck(req: SuggestRequest, ctx: EngineContext, opts: DeckOpt
     }
     ordered = first.concat(rest);
   } else {
-    ordered = diversify(oneEach(dropPoorMood(cands, goodMood, req.mood).sort(byScore)), limit, seenCap, index);
+    ordered = deal(oneEach(dropPoorMood(cands, goodMood, req.mood).sort(byScore)), limit, 0);
   }
 
   // Report scores that never rise down the deck, so "higher is better" matches the order.
@@ -506,10 +545,9 @@ function oneEach(sorted: Candidate[]): Candidate[] {
  * mark-downs are small, so this only reshuffles titles that were close anyway —
  * it can never lift a poor title over a good one.
  */
-function diversify(sorted: Candidate[], limit: number, seenCap: number, index: CatalogIndex): Candidate[] {
+function diversify(sorted: Candidate[], limit: number, index: CatalogIndex): Candidate[] {
   const pool = sorted.slice(0, Math.max(limit * 4, 120));
   const out: Candidate[] = [];
-  let seenCount = 0;
   let run = 0; // how many of the latest picks in a row are the same kind (film / series)
   const WINDOW = 5;
   while (out.length < limit && pool.length) {
@@ -526,7 +564,6 @@ function diversify(sorted: Candidate[], limit: number, seenCap: number, index: C
         adj -= decay * alike(c, out[j], index);
         decay *= 0.65;
       }
-      if (c.seen && seenCap < 1 && seenCount + 1 > seenCap * (out.length + 1) + 0.5) adj -= 0.15;
       // A long unbroken run of series (or of films) makes the other kind a little more welcome.
       if (run >= 3 && c.info.item.kind === out[out.length - 1].info.item.kind) adj -= Math.min(0.08, 0.02 * (run - 2));
       if (adj > bestAdj) {
@@ -535,11 +572,75 @@ function diversify(sorted: Candidate[], limit: number, seenCap: number, index: C
       }
     }
     const [chosen] = pool.splice(bestK, 1);
-    if (chosen.seen) seenCount++;
     run = out.length && out[out.length - 1].info.item.kind === chosen.info.item.kind ? run + 1 : 1;
     out.push(chosen);
   }
   return out;
+}
+
+/**
+ * "EITHER" = A LEAN TOWARDS NEW. The deck is the deck of NEW titles, with one
+ * card in every REWATCH_EVERY (ten) given over to something a watcher has
+ * already seen (Together: either of them).
+ *
+ *  - Where: one slot per run of ten cards, somewhere in the middle of the run
+ *    (never the first two cards or the last one), so rewatches are spread
+ *    through the deck rather than bunched. The seed moves the slot around.
+ *  - Only good ones: the title must clear the bar described at REWATCH_BAR_DEPTH.
+ *  - Which: of those, the best REWATCHES for this request, best first — scored
+ *    like everything else, plus noveltyAdjust's view of how well each one
+ *    rewatches in this mood (a favourite sitcom on a cozy night beats a
+ *    thriller whose ending they know). With a seed, near-equal ones take turns.
+ *    If fewer clear it than there are slots, the spare slots simply go to new
+ *    titles: a rewatch is never forced in.
+ *  - Never more than the slots, however many good rewatches there are.
+ *  - The one exception: when there is nothing new at all to offer, the deck is
+ *    made of rewatches rather than being empty.
+ *
+ * `startAt` is the position in the whole deck of this run's first card (the
+ * craving filler tier starts part-way down), so slots are counted across the
+ * whole deck. Input is best-first, already de-duplicated and mood-filtered.
+ */
+function dealEither(sorted: Candidate[], limit: number, startAt: number, seed: number, index: CatalogIndex): Candidate[] {
+  const fresh: Candidate[] = [];
+  const seenBefore: Candidate[] = [];
+  for (const c of sorted) (c.seen ? seenBefore : fresh).push(c);
+  if (!fresh.length) return diversify(seenBefore, limit, index);
+  const freshDeck = diversify(fresh, limit, index);
+  if (!seenBefore.length) return freshDeck;
+
+  const bar = fresh[Math.min(fresh.length, REWATCH_BAR_DEPTH) - 1].score - REWATCH_SLACK;
+  const laneScore = (c: Candidate) => c.score + (seed !== 0 ? (hash01(seed, `rewatch:${c.info.item.id}`) - 0.5) * REWATCH_JITTER : 0);
+  const rewatches = seenBefore
+    .filter((c) => c.merit >= bar)
+    .map((c) => ({ c, s: laneScore(c) }))
+    .sort((a, b) => b.s - a.s || (a.c.info.item.id < b.c.info.item.id ? -1 : 1));
+
+  const out: Candidate[] = [];
+  let f = 0;
+  let r = 0;
+  while (out.length < limit) {
+    const pos = startAt + out.length;
+    // (Only between new cards: never before the first one or after the last.)
+    if (r < rewatches.length && f > 0 && f < freshDeck.length && pos % REWATCH_EVERY === rewatchSlot(Math.floor(pos / REWATCH_EVERY), seed)) {
+      // Report a score that fits where the card sits, so one rewatch cannot drag down the cards after it.
+      const c = rewatches[r++].c;
+      const next = freshDeck[f].score;
+      out.push({ ...c, score: Math.max(c.score, next) });
+    } else if (f < freshDeck.length) {
+      out.push(freshDeck[f++]);
+    } else {
+      break;
+    }
+  }
+  return out;
+}
+
+/** Which card (0-based) of the `run`-th run of ten is the rewatch slot. Seed 0 = always the fifth card. */
+function rewatchSlot(run: number, seed: number): number {
+  if (seed === 0) return REWATCH_SLOT_DEFAULT;
+  const span = REWATCH_SLOT_TO - REWATCH_SLOT_FROM + 1;
+  return REWATCH_SLOT_FROM + (Math.floor(hash01(seed, `rewatch-slot:${run}`) * span) % span);
 }
 
 /** 0..~0.07: how much two titles feel like "the same thing again". */
@@ -563,9 +664,21 @@ function alike(a: Candidate, b: Candidate, index: CatalogIndex): number {
 // ---------------------------------------------------------------------------
 
 /**
+ * Taste-only score (no mood, no time) used by the New feed and the follow-ups.
+ * `following[k]` = person k already watches this show and this is news about it.
+ */
+export function feedScore(info: ItemInfo, people: PersonCtx[], index: CatalogIndex, following: boolean[]): number {
+  const scores = people.map((p, k) => {
+    const t = tasteParts(info, p, index);
+    return W_TASTE * t.taste + W_SHAPE * t.shape + W_LEARN * t.learned + W_QUALITY * info.quality + W_POP * info.pop + t.corr + (following[k] ? 0.12 : 0);
+  });
+  return round4(blend(scores));
+}
+
+/**
  * Recent arrivals, ranked by taste. No mood or time limits apply. Kept only if
- * the title is in the catalog, on our plans, clear of dealbreakers and Never
- * (and not swiped "not tonight" today). Titles a watcher has already seen are
+ * the title is in the catalog, on our plans, clear of dealbreakers and Never,
+ * not already on the Matches tab (and not swiped "not tonight" today). Titles a watcher has already seen are
  * dropped unless the arrival is a new season. If a title is listed twice, the
  * first (newest) entry wins.
  */
@@ -575,6 +688,7 @@ export function rankNewArrivals(arrivals: NewArrivals, who: Who, ctx: EngineCont
   const plans = ctx.state.settings?.plans;
   const done = new Set<string>();
   const cards: NewCard[] = [];
+  const picked = pickedIds(who, ctx);
 
   for (const arrival of arrivals?.entries ?? []) {
     const info = index.byId.get(arrival.itemId);
@@ -585,6 +699,7 @@ export function rankNewArrivals(arrivals: NewArrivals, who: Who, ctx: EngineCont
     if (hitsDealbreaker(item, who, ctx)) continue;
     if (isNeverHidden(item.id, who, ctx)) continue;
     if (isNotTonight(item.id, who, ctx)) continue;
+    if (picked.has(item.id)) continue;
     const seenFlags = people.map((p) => hasSeen(p.person, item.id, ctx));
     const isSeason = arrival.type === 'season';
     if (seenFlags.includes(true) && !isSeason) continue;
@@ -593,18 +708,14 @@ export function rankNewArrivals(arrivals: NewArrivals, who: Who, ctx: EngineCont
     if (!pick) continue;
     done.add(sameTitleKey(item));
 
-    const scores = people.map((p, k) => {
-      const t = tasteParts(info, p, index);
-      // A new season of something they already watch is the best news the feed can carry.
-      const following = isSeason && seenFlags[k] ? 0.12 : 0;
-      return W_TASTE * t.taste + W_SHAPE * t.shape + W_LEARN * t.learned + W_QUALITY * info.quality + W_POP * info.pop + t.corr + following;
-    });
+    // A new season of something they already watch is the best news the feed can carry.
+    const score = feedScore(info, people, index, people.map((_, k) => isSeason && seenFlags[k]));
     cards.push({
       itemId: item.id,
       pick: pick.pick,
       service,
       minutes: pick.minutes,
-      score: round4(blend(scores)),
+      score,
       reasons: buildReasons({ info, people, req: null, pick: pick.pick, moodRaw: 0 }),
       arrival,
     });

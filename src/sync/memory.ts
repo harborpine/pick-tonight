@@ -12,7 +12,8 @@ import type {
   SyncApi,
   TogetherSession,
 } from '../contracts';
-import { decideSwipe } from './match';
+import { decideSwipe, soloPickId } from './match';
+import { mergeSeenInputs, normalizeSeen, SEEN_MAX } from './seen';
 
 const KEY = 'wtw.memory-sync.v1';
 
@@ -28,6 +29,15 @@ const hasStorage = (): boolean => {
     return false;
   }
 };
+/** Read data saved by the first app version (numeric seen values, `history`) as the new shapes. */
+function upgrade(sv: Saved): Saved {
+  const st = sv.state as (SharedState & { history?: SharedState['picks'] }) | null;
+  if (!st) return sv;
+  for (const p of ['HG', 'BG'] as PersonId[]) st.seen[p] = normalizeSeen(st.seen[p] as unknown as Record<string, unknown>);
+  if (!st.picks) st.picks = st.history ?? [];
+  delete st.history;
+  return sv;
+}
 const uid = (): string => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
 export function createMemorySync(): SyncApi {
@@ -61,7 +71,7 @@ export function createMemorySync(): SyncApi {
     async init() {
       if (hasStorage()) {
         const raw = localStorage.getItem(KEY);
-        if (raw) saved = JSON.parse(raw) as Saved;
+        if (raw) saved = upgrade(JSON.parse(raw) as Saved);
       }
       setDevice({ status: saved.state ? 'paired' : 'unpaired', person: saved.person, error: null });
     },
@@ -82,7 +92,7 @@ export function createMemorySync(): SyncApi {
           never: { HG: {}, BG: {} },
           notTonight: { HG: {}, BG: {} },
           watchlist: [],
-          history: [],
+          picks: [],
           activeSession: null,
         },
       };
@@ -109,12 +119,18 @@ export function createMemorySync(): SyncApi {
       return () => stateSubs.delete(cb);
     },
 
-    async setSeen(person, itemIds, seen) {
+    async markWatched(person, entries) {
       update((s) => {
-        for (const id of itemIds) {
-          if (seen) s.seen[person][id] = Date.now();
-          else delete s.seen[person][id];
+        const merged = mergeSeenInputs(entries, s.seen[person], Date.now());
+        if (new Set([...Object.keys(s.seen[person]), ...Object.keys(merged)]).size > SEEN_MAX) {
+          throw new Error(`That would make more than ${SEEN_MAX.toLocaleString('en-US')} watched titles for one person, which is the most this app can keep. Nothing was changed.`);
         }
+        Object.assign(s.seen[person], merged);
+      });
+    },
+    async unmarkWatched(person, itemIds) {
+      update((s) => {
+        for (const id of itemIds) delete s.seen[person][id];
       });
     },
     async setNever(person, itemId, never) {
@@ -139,9 +155,16 @@ export function createMemorySync(): SyncApi {
         s.watchlist = s.watchlist.filter((w) => !(w.list === list && w.itemId === itemId));
       });
     },
-    async addHistory(entry) {
+    async addPick(entry) {
       update((s) => {
-        s.history.unshift({ ...entry, id: uid(), at: Date.now() });
+        if (s.picks.some((p) => p.itemId === entry.itemId && p.who === entry.who)) return;
+        const id = entry.kind === 'solo' ? soloPickId(entry.who, entry.itemId) : uid();
+        s.picks.unshift({ ...entry, id, at: Date.now() });
+      });
+    },
+    async removePick(pickId) {
+      update((s) => {
+        s.picks = s.picks.filter((p) => p.id !== pickId);
       });
     },
     async saveProfile(profile) {
@@ -185,7 +208,7 @@ export function createMemorySync(): SyncApi {
         const sess = session(s, sessionId);
         const d = decideSwipe(sess, person, itemId, yes, matchSnapshot, Date.now());
         s.activeSession = d.session;
-        if (d.history) s.history.unshift(d.history);
+        if (d.pick) s.picks.unshift(d.pick);
         matched = d.matched;
       });
       return matched;

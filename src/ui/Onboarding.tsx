@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import type { PersonId } from '../contracts';
 import { Poster } from './components';
 import { useApp } from './context';
+import { snapshotOf } from './helpers';
 
 /** "Tick what you've seen" poster grid. Skippable; reachable again from the profile page. */
 export function Onboarding({ person, onClose }: { person: PersonId; onClose: () => void }) {
@@ -16,6 +17,8 @@ export function Onboarding({ person, onClose }: { person: PersonId; onClose: () 
   const alreadySeen = useMemo(() => new Set(Object.keys(state.seen[person] ?? {})), []); // eslint-disable-line react-hooks/exhaustive-deps
   const [picked, setPicked] = useState<Set<string>>(() => new Set(alreadySeen));
   const [busy, setBusy] = useState(false);
+  // Only count tiles on this grid (an imported history can hold thousands of other titles).
+  const pickedShown = titles.reduce((n, t) => n + (picked.has(t.id) ? 1 : 0), 0);
 
   const toggle = (id: string) =>
     setPicked((p) => {
@@ -33,8 +36,17 @@ export function Onboarding({ person, onClose }: { person: PersonId; onClose: () 
         const shown = new Set(titles.map((t) => t.id));
         const add = [...picked].filter((id) => !alreadySeen.has(id));
         const remove = [...alreadySeen].filter((id) => shown.has(id) && !picked.has(id));
-        if (add.length) await sync.setSeen(person, add, true);
-        if (remove.length) await sync.setSeen(person, remove, false);
+        const byId = new Map(titles.map((t) => [t.id, t]));
+        if (add.length) {
+          await sync.markWatched(
+            person,
+            add.flatMap((id) => {
+              const t = byId.get(id);
+              return t ? [{ itemId: id, source: 'onboarding' as const, snapshot: snapshotOf(t) }] : [];
+            }),
+          );
+        }
+        if (remove.length) await sync.unmarkWatched(person, remove);
       }
       const profile = sync.getState()?.profiles[person] ?? state.profiles[person];
       if (!profile.onboarded) await sync.saveProfile({ ...profile, onboarded: true });
@@ -78,7 +90,7 @@ export function Onboarding({ person, onClose }: { person: PersonId; onClose: () 
           Skip
         </button>
         <button type="button" className="btn btn-primary" data-testid="onboard-done" disabled={busy} onClick={() => finish(true)}>
-          Done{picked.size ? ` (${picked.size})` : ''}
+          Done{pickedShown ? ` (${pickedShown})` : ''}
         </button>
       </footer>
     </div>

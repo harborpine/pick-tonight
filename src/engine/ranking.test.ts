@@ -364,9 +364,11 @@ describe('one favourite does not speak for the whole person', () => {
   });
   it('on the real favourites: BG (one animated favourite of 22) gets less adult animation than HG (four of 14)', () => {
     const real = makeCtx();
+    // v2: counted over a rewatch deck and a new deck (was one 'either' deck, which used to deal all
+    // their animated favourites near the top and now deals about one seen title in ten).
     const animated = (who: 'HG' | 'BG') =>
-      engine
-        .buildDeck(req({ who, mood: 'laugh', viewing: 'background', time: 20, novelty: 'either' }), real, { limit: 6 })
+      (['rewatch', 'new'] as const)
+        .flatMap((novelty) => engine.buildDeck(req({ who, mood: 'laugh', viewing: 'background', time: 20, novelty }), real, { limit: 6 }))
         .filter((c) => real.catalog.items.find((i) => i.id === c.itemId)!.genres.includes('animation')).length;
     expect(animated('BG')).toBeLessThan(animated('HG'));
     // Bob's Burgers (animated) vs Parks and Recreation (live-action sitcom): BG's sitcom favourites should win out.
@@ -445,27 +447,34 @@ describe('Together: the pick has to suit both', () => {
   });
 });
 
+// v2: this block replaces three tests of the old 'either' behaviour (seen titles mixed in by a score
+// mark-down, capped at a third / a half of the deck). 'Either' is now "the new deck, with about one
+// card in ten a good rewatch"; the full statistical tests are in either.test.ts.
 describe('new vs seen under "either"', () => {
-  it('in a non-comfort mood, new titles lead and things already seen are marked down', () => {
-    const deck = engine.buildDeck(req({ who: 'HG', mood: 'gripped', novelty: 'either' }), makeCtx(), { limit: 100 });
+  it('in a non-comfort mood, new titles lead and a rewatch only appears a few cards in', () => {
     const ctx = makeCtx();
+    const deck = engine.buildDeck(req({ who: 'HG', mood: 'gripped', novelty: 'either' }), ctx, { limit: 100 });
     expect(engine.hasSeen('HG', deck[0].itemId, ctx)).toBe(false);
-    const seenInTop = deck.slice(0, 9).filter((c) => engine.hasSeen('HG', c.itemId, ctx)).length;
-    expect(seenInTop).toBeLessThanOrEqual(3);
+    expect(engine.hasSeen('HG', deck[1].itemId, ctx)).toBe(false);
+    const seenInTop = deck.slice(0, 10).filter((c) => engine.hasSeen('HG', c.itemId, ctx)).length;
+    expect(seenInTop).toBeLessThanOrEqual(1);
   });
-  it('in a comfort mood, favourites are welcome near the top but do not fill the deck', () => {
+  it('in a comfort mood, one favourite is dealt among the first ten cards — one, not a handful', () => {
     const ctx = makeCtx();
     const deck = engine.buildDeck(req({ who: 'HG', mood: 'cozy', viewing: 'background', time: 20, novelty: 'either' }), ctx);
-    const top = deck.slice(0, 10);
-    const seen = top.filter((c) => engine.hasSeen('HG', c.itemId, ctx)).length;
-    expect(seen).toBeGreaterThanOrEqual(1);
-    expect(seen).toBeLessThanOrEqual(6);
+    const seen = deck.slice(0, 10).filter((c) => engine.hasSeen('HG', c.itemId, ctx));
+    expect(seen).toHaveLength(1);
+    expect(ctx.state.profiles.HG.favorites).toContain(seen[0].itemId);
   });
-  it('a seen title ranks lower under "either" than the same title unseen', () => {
+  it('marking a title seen takes it out of the run of new titles: at best it becomes the one-in-ten rewatch', () => {
     const id = 'tv-76331'; // Succession
-    const unseen = engine.buildDeck(req({ who: 'HG', mood: 'gripped' }), makeCtx(), { limit: 100 });
-    const seen = engine.buildDeck(req({ who: 'HG', mood: 'gripped' }), makeCtx({ seen: { HG: [id] } }), { limit: 100 });
+    const r = req({ who: 'HG', mood: 'gripped' });
+    const unseen = engine.buildDeck(r, makeCtx(), { limit: 100 });
+    const seen = engine.buildDeck(r, makeCtx({ seen: { HG: [id] } }), { limit: 100 });
+    expect(rank(unseen, id)).toBeLessThan(10);
+    // Seen: either not dealt at all, or dealt in a rewatch slot (never in the first two cards).
     expect(rank(seen, id)).toBeGreaterThan(rank(unseen, id));
+    expect(rank(seen, id)).toBeGreaterThanOrEqual(2);
   });
   it('for a rewatch, favourites come first', () => {
     const ctx = makeCtx({ seen: { HG: ['tv-8592', 'tv-48891', 'tv-125935'] } });

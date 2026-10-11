@@ -10,7 +10,6 @@ import {
   deleteDoc,
   deleteField,
   doc,
-  documentId,
   FieldPath,
   getDoc,
   getDocFromServer,
@@ -29,15 +28,16 @@ import {
   waitForPendingWrites,
   where,
   writeBatch,
+  type WriteBatch,
   type Firestore,
 } from 'firebase/firestore';
 import webConfig from '../../firebase.web-config.json';
 import type {
   DeckCard,
   DeviceState,
-  HistoryEntry,
   HouseholdSeed,
   PersonId,
+  PickEntry,
   SharedState,
   SuggestRequest,
   SyncApi,
@@ -50,15 +50,16 @@ import type {
 import { assembleState, type RawParts } from './assemble';
 import { friendlyError, MSG, SyncError, withTimeout } from './errors';
 import {
-  HISTORY_MONTHS_LISTENED,
   MAX_DECK_CARDS,
   monthOf,
   PATHS,
   watchKey,
   type MonthDoc,
+  type SeenShardDoc,
   type SharedDoc,
 } from './layout';
-import { decideSwipe } from './match';
+import { decideSwipe, soloPickId } from './match';
+import { chunk, mergeSeenInputs, normalizeSeen, SEEN_CHUNK, SEEN_MAX, SEEN_SHARDS, shardDocId, shardOf, encodeDetail } from './seen';
 import { generateCode, isValidCodeShape, normalizeCode } from './pairing';
 
 export interface KeyValueStore {
@@ -96,6 +97,9 @@ interface Saved {
 
 const STORE_KEY = 'wtw.sync.pairing.v1';
 const ONLINE_MS = 15000;
+/** How long a big watched-list write waits for the server before treating the phone as offline. */
+const SEEN_CONFIRM_MS = 8000;
+const EMIT_DELAY_MS = 25;
 
 function defaultStore(): KeyValueStore {
   try {
@@ -110,13 +114,6 @@ function defaultStore(): KeyValueStore {
   return { getItem: (k) => m.get(k) ?? null, setItem: (k, v) => void m.set(k, v), removeItem: (k) => void m.delete(k) };
 }
 
-/** 'YYYY-MM' for n months before now (history documents are named by month). */
-const monthsAgo = (n: number): string => {
-  const d = new Date();
-  d.setUTCDate(1);
-  d.setUTCMonth(d.getUTCMonth() - n);
-  return d.toISOString().slice(0, 7);
-};
 const newId = (): string => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 const todayLocal = (): string => {
   const d = new Date();
@@ -146,7 +143,7 @@ export function createFirebaseSync(opts: FirebaseSyncOptions = {}): FirebaseSync
   const madeCodes = new Set<string>();
 
   function freshParts(): RawParts {
-    return { shared: null, seen: { HG: {}, BG: {} }, months: {}, sessions: [] };
+    return { shared: null, seen: { HG: {}, BG: {} }, seenDetails: { HG: {}, BG: {} }, months: {}, sessions: [] };
   }
 
   // ---------------------------------------------------------------- device ----
@@ -216,16 +213,28 @@ export function createFirebaseSync(opts: FirebaseSyncOptions = {}): FirebaseSync
 
   // -------------------------------------------------------------- listeners ----
   const stopListeners = () => {
+    if (emitTimer) clearTimeout(emitTimer);
+    emitTimer = null;
     unsubs.forEach((u) => u());
     unsubs = [];
     got = new Set();
     parts = freshParts();
   };
 
+  /**
+   * Tell subscribers about new data. One change on the server reaches us as several separate listener
+   * callbacks (the watched-number map and its details live in different documents), so wait a moment and
+   * publish once with everything that arrived, instead of a half-updated state.
+   */
+  let emitTimer: ReturnType<typeof setTimeout> | null = null;
   const emit = () => {
-    if (got.size < 5) return;
-    state = assembleState(parts);
-    stateSubs.forEach((cb) => cb(state!));
+    if (got.size < 6 || emitTimer) return;
+    emitTimer = setTimeout(() => {
+      emitTimer = null;
+      if (got.size < 6) return;
+      state = assembleState(parts);
+      stateSubs.forEach((cb) => cb(state!));
+    }, EMIT_DELAY_MS);
   };
 
   function lostAccess() {
@@ -269,7 +278,7 @@ export function createFirebaseSync(opts: FirebaseSyncOptions = {}): FirebaseSync
         onSnapshot(
           doc(db, PATHS.seen(hid, p)),
           (snap) => {
-            parts.seen[p] = (snap.exists() ? (snap.data() as { m?: Record<string, number> }).m : undefined) ?? {};
+            parts.seen[p] = (snap.exists() ? (snap.data() as { m?: Record<string, unknown> }).m : undefined) ?? {};
             mark(`seen${p}`, snap.metadata.fromCache);
           },
           onErr,
@@ -278,7 +287,23 @@ export function createFirebaseSync(opts: FirebaseSyncOptions = {}): FirebaseSync
     }
     unsubs.push(
       onSnapshot(
-        query(collection(db, PATHS.months(hid)), where(documentId(), '>=', monthsAgo(HISTORY_MONTHS_LISTENED))),
+        collection(db, PATHS.seenDetails(hid)),
+        (snap) => {
+          const details: Record<PersonId, Record<string, string>> = { HG: {}, BG: {} };
+          snap.forEach((d) => {
+            const person = d.id.startsWith('BG_') ? 'BG' : d.id.startsWith('HG_') ? 'HG' : null;
+            if (person) Object.assign(details[person], (d.data() as SeenShardDoc).e ?? {});
+          });
+          parts.seenDetails = details;
+          mark('seenDetails', snap.metadata.fromCache);
+        },
+        onErr,
+      ),
+    );
+    // Every month document, so the Matches tab never silently drops an old pick.
+    unsubs.push(
+      onSnapshot(
+        collection(db, PATHS.months(hid)),
         (snap) => {
           const months: Record<string, MonthDoc> = {};
           snap.forEach((d) => {
@@ -330,6 +355,50 @@ export function createFirebaseSync(opts: FirebaseSyncOptions = {}): FirebaseSync
     p.catch((e) => setError(friendlyError(e)));
     return Promise.resolve();
   };
+
+  /**
+   * Write a (possibly large) set of watched-title changes in chunks of SEEN_CHUNK titles, each chunk one
+   * atomic batch. Small calls behave like every other edit (resolve at once, sync in the background).
+   * Large calls wait for the server so a refusal can be reported: the promise rejects with a plain sentence
+   * and says how many titles were saved. Re-running is always safe (same values are simply written again).
+   * Offline, the first chunk cannot be confirmed within a few seconds, so everything is queued on the phone
+   * (the app already shows the change) and uploads by itself when the connection returns; later
+   * problems then show up in device.error instead of rejecting.
+   */
+  async function writeSeen(ids: string[], fill: (batch: WriteBatch, part: string[]) => void, db: Firestore): Promise<void> {
+    const parts = chunk(ids, SEEN_CHUNK);
+    const build = (part: string[]): Promise<void> => {
+      const batch = writeBatch(db);
+      fill(batch, part);
+      return batch.commit();
+    };
+    if (ids.length <= 25) return send(build(ids));
+    let done = 0;
+    let queued = false;
+    for (const part of parts) {
+      const p = build(part);
+      if (queued) {
+        p.catch((e) => setError(friendlyError(e)));
+        done += part.length;
+        continue;
+      }
+      try {
+        const r = await Promise.race([p.then(() => 'ok' as const), new Promise<'slow'>((res) => setTimeout(() => res('slow'), SEEN_CONFIRM_MS))]);
+        if (r === 'slow') {
+          queued = true;
+          p.catch((e) => setError(friendlyError(e)));
+        }
+        done += part.length;
+      } catch (e) {
+        const why = friendlyError(e);
+        throw new SyncError(
+          done > 0
+            ? `${why} ${done} of ${ids.length} titles were saved. Run it again to finish; nothing will be doubled.`
+            : why,
+        );
+      }
+    }
+  }
 
   // ------------------------------------------------------------------- API ----
   const api: FirebaseSyncApi = {
@@ -487,14 +556,43 @@ export function createFirebaseSync(opts: FirebaseSyncOptions = {}): FirebaseSync
     },
 
     // ---- mutations ----
-    async setSeen(person, itemIds, seen) {
+    async markWatched(person, entries) {
       const { hid, db } = requirePaired();
-      if (itemIds.length === 0) return;
-      const now = Date.now();
-      const args: unknown[] = [];
-      for (const id of itemIds) args.push(new FieldPath('m', id), seen ? now : deleteField());
-      const [f, v, ...rest] = args as [FieldPath, unknown, ...unknown[]];
-      return send(updateDoc(doc(db, PATHS.seen(hid, person)), f, v, ...rest));
+      if (entries.length === 0) return;
+      const merged = mergeSeenInputs(entries, state?.seen[person] ?? {}, Date.now());
+      const ids = Object.keys(merged);
+      const total = new Set([...Object.keys(state?.seen[person] ?? {}), ...ids]).size;
+      if (total > SEEN_MAX) {
+        throw new SyncError(`That would make more than ${SEEN_MAX.toLocaleString('en-US')} watched titles for one person, which is the most this app can keep. Nothing was changed.`);
+      }
+      return writeSeen(ids, (batch, part) => {
+        const m: Record<string, number> = {};
+        const byShard = new Map<number, Record<string, string>>();
+        for (const id of part) {
+          const e = merged[id]!;
+          m[id] = e.at;
+          const sh = shardOf(id);
+          byShard.set(sh, { ...byShard.get(sh), [id]: encodeDetail(e) });
+        }
+        for (const [sh, e] of byShard) batch.set(doc(db, PATHS.seenShard(hid, shardDocId(person, sh))), { e }, { merge: true });
+        batch.set(doc(db, PATHS.seen(hid, person)), { m }, { merge: true });
+      }, db);
+    },
+    async unmarkWatched(person, itemIds) {
+      const { hid, db } = requirePaired();
+      const ids = [...new Set(itemIds)];
+      if (ids.length === 0) return;
+      return writeSeen(ids, (batch, part) => {
+        const m: Record<string, unknown> = {};
+        const byShard = new Map<number, Record<string, unknown>>();
+        for (const id of part) {
+          m[id] = deleteField();
+          const sh = shardOf(id);
+          byShard.set(sh, { ...byShard.get(sh), [id]: deleteField() });
+        }
+        for (const [sh, e] of byShard) batch.set(doc(db, PATHS.seenShard(hid, shardDocId(person, sh))), { e }, { merge: true });
+        batch.set(doc(db, PATHS.seen(hid, person)), { m }, { merge: true });
+      }, db);
     },
     async setNever(person, itemId, never) {
       const { hid, db } = requirePaired();
@@ -525,11 +623,20 @@ export function createFirebaseSync(opts: FirebaseSyncOptions = {}): FirebaseSync
         updateDoc(doc(db, PATHS.shared(hid)), new FieldPath('watchlist', watchKey(list, itemId)), deleteField()),
       );
     },
-    async addHistory(entry) {
+    async addPick(entry) {
       const { hid, db } = requirePaired();
+      if (state?.picks.some((p) => p.itemId === entry.itemId && p.who === entry.who)) return;
       const at = Date.now();
-      const full: HistoryEntry = { ...entry, id: newId(), at };
+      const id = entry.kind === 'solo' ? soloPickId(entry.who, entry.itemId) : newId();
+      const full: PickEntry = { ...entry, id, at };
       return send(setDoc(doc(db, PATHS.month(hid, monthOf(at))), { entries: { [full.id]: full } }, { merge: true }));
+    },
+    async removePick(pickId) {
+      const { hid, db } = requirePaired();
+      // The entry lives in whichever month document it was written to (any month, old or new).
+      const month = Object.keys(parts.months).find((mid) => parts.months[mid]?.entries?.[pickId]);
+      if (!month) return;
+      return send(updateDoc(doc(db, PATHS.month(hid, month)), new FieldPath('entries', pickId), deleteField()));
     },
     async saveProfile(profile) {
       const { hid, db } = requirePaired();
@@ -585,10 +692,10 @@ export function createFirebaseSync(opts: FirebaseSyncOptions = {}): FirebaseSync
               const now = Date.now();
               const d = decideSwipe(snap.data() as TogetherSession, person, itemId, true, matchSnapshot, now);
               tx.update(ref, { yes: d.session.yes, matches: d.session.matches });
-              if (d.history) {
+              if (d.pick) {
                 tx.set(
                   doc(db, PATHS.month(hid, monthOf(now))),
-                  { entries: { [d.history.id]: d.history } },
+                  { entries: { [d.pick.id]: d.pick } },
                   { merge: true },
                 );
               }
@@ -642,7 +749,7 @@ export function createFirebaseSync(opts: FirebaseSyncOptions = {}): FirebaseSync
     async destroyHousehold() {
       const { hid, db } = requirePaired();
       stopListeners();
-      for (const c of [PATHS.months(hid), PATHS.sessions(hid)]) {
+      for (const c of [PATHS.months(hid), PATHS.sessions(hid), PATHS.seenDetails(hid)]) {
         const snap = await getDocs(collection(db, c));
         await Promise.all(snap.docs.map((d) => deleteDoc(d.ref)));
       }

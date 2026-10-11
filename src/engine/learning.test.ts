@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import type { DeckCard, Profile, SwipeAction } from '../contracts';
 import { FIXTURE_CATALOG } from '../contracts/fixtures/catalog';
 import { createEngine } from './index';
-import { itemsById, makeCtx, req } from './testkit';
+import { itemsById, makeCtx, req, syntheticCatalog } from './testkit';
 
 const engine = createEngine();
 const C = FIXTURE_CATALOG;
@@ -267,20 +267,27 @@ describe('correctTaste (manual corrections)', () => {
   });
 
   it('"less" visibly pushes matching titles down the deck, and outranks learning', () => {
+    // v2: same checks, on reality shows she has NOT seen. The sample catalog's reality shows are all
+    // BG's favourites, and an 'either' deck now deals only about one seen title in ten, so the old
+    // version (which compared her favourites' positions in an 'either' deck) no longer has them to compare.
+    const catalog = syntheticCatalog(200); // the sample catalog plus look-alikes nobody has seen
+    const genresOf = (id: string) => catalog.items.find((i) => i.id === id)!.genres;
     const r = req({ who: 'BG', mood: 'brainoff', viewing: 'background', time: 60, novelty: 'either' });
-    const before = engine.buildDeck(r, makeCtx(), { limit: 100 });
-    expect(rank(before, LOVE_ISLAND)).toBeLessThan(6);
+    const before = engine.buildDeck(r, makeCtx({ catalog }), { limit: 100 });
+    const reality = before.filter((c) => genresOf(c.itemId).includes('reality')).slice(0, 3).map((c) => c.itemId);
+    expect(reality).toHaveLength(3);
+    expect(rank(before, reality[0])).toBeLessThan(6);
 
-    const ctx = makeCtx();
+    const ctx = makeCtx({ catalog });
     let p = swipe(ctx.state.profiles.BG, BAKE_OFF, 'yes', 10);
     p = engine.correctTaste(p, 'genre:reality', 'less');
     ctx.state.profiles.BG = p;
     const after = engine.buildDeck(r, ctx, { limit: 100 });
-    for (const id of [LOVE_ISLAND, BAKE_OFF, 'tv-69478']) {
+    for (const id of reality) {
       expect(rank(after, id), id).toBeGreaterThan(rank(before, id) + 3);
     }
     // Nothing reality in the top five any more.
-    for (const c of after.slice(0, 5)) expect(item(c.itemId).genres).not.toContain('reality');
+    for (const c of after.slice(0, 5)) expect(genresOf(c.itemId)).not.toContain('reality');
   });
 
   it('"more" visibly pulls matching titles up, and says so in the reasons', () => {

@@ -35,9 +35,41 @@ That's it. The two phones are now linked, and only these two phones can see your
 - **Always open the app from the home-screen icon**, not from Safari. The icon version and the Safari version don't share their memory, so pairing done in one doesn't carry over to the other.
 - **Deciding together:** one of you picks *Together* and taps **Show me**. The other phone shows a "join" prompt as long as the app is open. You each swipe on your own phone; when you've both said yes to the same thing, both phones show the match.
 - **Swiping:** right = yes, left = not tonight (it can come back another day). The buttons under the card are *Seen it*, *Save* (to a watchlist) and *Never*.
+- **Swiping right on your own** keeps you on the deck. Your yeses collect in the **Matches** tab, alongside everything the two of you matched on together. Anything sitting in Matches stops being suggested until you deal with it.
+- **Matches vs History:** *Matches* is what you've said yes to. *History* is only what you've actually watched. In Matches, tap a title and choose **I watched this** (or **We watched this**) to move it to History, or **Remove** to put it back in circulation.
+- **"Either" means mostly new:** about one suggestion in ten is something you've seen before.
+- **New seasons and spinoffs** of things you've watched appear at the top of the **New** tab. A dot on the tab means there's one you haven't looked at yet.
 - **Saying yes in Together mode needs internet.** Everything else still works with a weak connection and catches up afterwards.
 - **The catalogue refreshes itself every morning.** You don't need to do anything.
 - **If you change a streaming plan**, update it under **Us → Settings**. The suggestions follow straight away.
+
+## Importing what you've already watched
+
+The more the app knows you've watched, the better it gets: those titles stop showing up as "new", and it learns your taste from them. You can load your Netflix history in a couple of minutes.
+
+**Get the file from Netflix** (easiest on a computer, but it works in Safari on the phone too):
+
+1. Go to **netflix.com** in a browser (not the Netflix app) and sign in.
+2. Open **Account**, then **Profiles**, and choose **your own** profile.
+3. Choose **Viewing activity**.
+4. Scroll to the very bottom and tap **Download all**. You get a file called *NetflixViewingHistory.csv*.
+5. If you did this on a computer, send the file to your phone (AirDrop, or email it to yourself and save it to **Files**).
+
+**Load it into the app:**
+
+1. Open the app, tap **Us**, then your own name.
+2. Find **Import what you've watched** and choose the file.
+3. The app shows what it found, including a list of anything it couldn't match. Nothing is saved yet.
+4. Tap **Add to my History**.
+
+Each of you does this for your own Netflix profile, on your own page.
+
+Good to know:
+
+- **Use the per-profile "Download all" file.** Netflix's other export (the "request my data" one for the whole account) mixes together everyone who uses the account, and the app can't separate it.
+- **Loading the same file twice is harmless.** Nothing gets doubled.
+- **Some titles won't match**, usually obscure ones or ones Netflix names differently. You can add any of them by hand: **History** tab, then **Add something I've watched**.
+- **Other services** (Hulu, Disney+, HBO Max, Peacock, Paramount+, Prime Video) only hand over your history through a "request my data" form on their website, which can take days. If you get such a file you can try it the same way, or paste a plain list of titles instead. These haven't been tested the way Netflix's file has.
 
 ## If something goes wrong
 

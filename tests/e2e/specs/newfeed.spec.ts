@@ -54,11 +54,11 @@ test('New feed: Yes / Save / Seen / Not tonight / Never behave like the deck act
   await openTab(page, 'new');
   const rowsBefore = await tid(page, 'new-row').count();
 
-  // Yes -> pick screen -> History (solo)
+  // Yes -> stays on the page, toast, goes to Matches (solo)
   await row(page, 'movie-661374').getByTestId('new-yes').click();
-  await expect(tid(page, 'pick-screen')).toHaveAttribute('data-item-id', 'movie-661374');
-  await expect(tid(page, 'pick-service')).toHaveText('Netflix');
-  await tid(page, 'pick-keep').click();
+  await expect(tid(page, 'pick-screen')).toHaveCount(0);
+  await expect(tid(page, 'toast')).toContainText('Added to Matches');
+  await expect(tid(page, 'new-feed')).toBeVisible();
   await expect(row(page, 'movie-661374')).toHaveCount(0);
 
   // Save to Ours
@@ -84,7 +84,7 @@ test('New feed: Yes / Save / Seen / Not tonight / Never behave like the deck act
   expect(await tid(page, 'new-row').count()).toBe(rowsBefore - 5);
 
   const st = await sharedState(page);
-  expect(st.history.find((h: any) => h.itemId === 'movie-661374')?.kind).toBe('solo');
+  expect(st.picks.find((h: any) => h.itemId === 'movie-661374')?.kind).toBe('solo');
   expect(st.watchlist.find((w: any) => w.itemId === 'movie-346648')?.list).toBe('ours');
   expect(Object.keys(st.seen.HG)).toContain('tv-136315');
   expect(st.notTonight.HG['tv-205715']).toBeTruthy();

@@ -15,7 +15,7 @@ import type {
   Who,
 } from '../contracts';
 
-export type Tab = 'tonight' | 'new' | 'watchlist' | 'history' | 'us';
+export type Tab = 'tonight' | 'new' | 'watchlist' | 'matches' | 'history' | 'us';
 
 export interface PerformArgs {
   item: CatalogItem;
@@ -30,13 +30,6 @@ export interface PerformArgs {
   sessionId?: string;
 }
 
-export interface PickInfo {
-  item: CatalogItem;
-  pick: WatchPick;
-  service: ServiceChoice;
-  who: Who;
-}
-
 export interface AppCtxValue {
   services: AppServices;
   state: SharedState;
@@ -47,8 +40,10 @@ export interface AppCtxValue {
   /** Best-effort title for any id (catalog items, then taste references). */
   titleOf: (id: string) => string;
   perform: (args: PerformArgs) => Promise<void>;
-  toast: (message: string) => void;
-  showPick: (info: PickInfo) => void;
+  /** A short message; with `action` it carries one button (e.g. Undo). */
+  toast: (message: string, action?: ToastAction) => void;
+  /** Mark follow-up keys as displayed on this phone (clears the New-tab dot). */
+  followUpsShown: (keys: string[]) => void;
   startOnboarding: (person: PersonId) => void;
   goTab: (tab: Tab) => void;
   /** Tonight tab flow. */
@@ -60,11 +55,18 @@ export interface AppCtxValue {
   setSessionLeft: (v: boolean) => void;
 }
 
+export interface ToastAction {
+  label: string;
+  onClick: () => void;
+}
+
 export interface SoloFlow {
   request: SuggestRequest;
   cards: import('../contracts').DeckCard[];
   /** How many cards were dealt to begin with (0 = nothing fit the request). */
   dealt: number;
+  /** Right-swipes (yes) in this deck session, for the "Liked" chip. */
+  liked: number;
 }
 
 export const AppCtx = createContext<AppCtxValue | null>(null);

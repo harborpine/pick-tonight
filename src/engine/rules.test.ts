@@ -4,7 +4,7 @@
  * Each rule is tested two ways:
  *  - named examples from the sample catalog, and
  *  - a sweep over EVERY combination of who x viewing x mood x time x novelty
- *    (1,080 requests) under several household setups, checking every card of
+ *    (1,350 requests, including the "any" time) under several household setups, checking every card of
  *    every deck with an independent checker written here from the spec — it
  *    does not call the engine's own eligibility code.
  */
@@ -70,7 +70,7 @@ const PADDINGTON = 'movie-346648';
 
 const WHO: Who[] = ['HG', 'BG', 'Together'];
 const VIEWING: ViewingType[] = ['focused', 'background', 'eating'];
-const TIMES: TimeBudget[] = [20, 45, 60, 120];
+const TIMES: TimeBudget[] = [20, 45, 60, 120, 'any'];
 const NOVELTY: Novelty[] = ['new', 'rewatch', 'either'];
 const ALL_MOODS = MOODS.map((m) => m.id);
 
@@ -90,7 +90,7 @@ function householdPlans(plans: PlanSelection) {
 const carriedBy = (i: CatalogItem, plans: PlanSelection) => householdPlans(plans).filter((h) => h.plan.providerIds.some((id) => i.providers.includes(id)));
 const seenBy = (p: PersonId, id: string, ctx: EngineContext) => id in ctx.state.seen[p] || ctx.state.profiles[p].favorites.includes(id);
 
-type Rule = 'rule1' | 'rule2' | 'rule3' | 'rule4' | 'rule5' | 'rule6' | 'rule7' | 'notTonight';
+type Rule = 'rule1' | 'rule2' | 'rule3' | 'rule4' | 'rule5' | 'rule6' | 'rule7' | 'notTonight' | 'picked';
 
 /** Every rule a card breaks, checked from first principles. */
 function violations(card: DeckCard, r: SuggestRequest, ctx: EngineContext): Rule[] {
@@ -143,6 +143,9 @@ function violations(card: DeckCard, r: SuggestRequest, ctx: EngineContext): Rule
 
   // not tonight
   if (people.some((p) => ctx.state.notTonight[p][i.id] === ctx.today)) out.push('notTonight');
+
+  // already on the Matches tab for someone watching
+  if (ctx.state.picks.some((p) => p.itemId === i.id && watchers(p.who).some((x) => people.includes(x)))) out.push('picked');
   return out;
 }
 
@@ -154,6 +157,11 @@ function setups(): { name: string; ctx: EngineContext }[] {
     seen: { HG: [OFFICE, 'movie-27205', PADDINGTON, STRANGER, 'tv-68595'], BG: [OFFICE, PARKS, 'tv-91239', 'movie-11036', 'tv-82728'] },
     never: { HG: ['tv-32726', 'tv-61662', SUCCESSION], BG: ['tv-61662', 'tv-48891', 'movie-8363'] },
     notTonight: { HG: { [ABBOTT]: TODAY, 'movie-546554': '2026-10-09' }, BG: { 'tv-4586': TODAY, 'movie-455207': '2026-10-01' } },
+    picks: [
+      { itemId: 'tv-1668', who: 'HG' }, // Friends: HG's solo pick
+      { itemId: 'tv-18347', who: 'BG' }, // Community: BG's solo pick
+      { itemId: 'movie-324857', who: 'Together' }, // Spider-Verse: a match
+    ],
   });
 
   const otherPlans = makeCtx({
@@ -170,7 +178,7 @@ function setups(): { name: string; ctx: EngineContext }[] {
 
   return [
     { name: 'fresh household', ctx: fresh },
-    { name: 'lived-in household (seen, never, not tonight)', ctx: livedIn },
+    { name: 'lived-in household (seen, never, not tonight, picks)', ctx: livedIn },
     { name: 'different plans', ctx: otherPlans },
     { name: 'dealbreakers swapped', ctx: swapped },
     { name: 'only two services', ctx: fewServices },
@@ -224,12 +232,12 @@ const sweepFinds = (rule: Rule) => sweep().broken.get(rule) ?? [];
 describe('the sweep itself', () => {
   it('covers every request combination under every setup, and actually deals cards', () => {
     const s = sweep();
-    expect(s.decks).toBe(5 * 4 * 1080);
+    expect(s.decks).toBe(5 * 4 * 1350);
     expect(s.cards).toBeGreaterThan(50_000);
   }, 120_000);
 
   it('the independent checker really catches each kind of violation (so a clean sweep means something)', () => {
-    const ctx = makeCtx({ never: { HG: [OFFICE] }, seen: { HG: [PARKS] }, notTonight: { HG: { [ABBOTT]: TODAY } } });
+    const ctx = makeCtx({ never: { HG: [OFFICE] }, seen: { HG: [PARKS] }, notTonight: { HG: { [ABBOTT]: TODAY } }, picks: [{ itemId: 'tv-48891', who: 'BG' }] });
     const card = (id: string, over: Partial<DeckCard> = {}): DeckCard => ({
       itemId: id,
       pick: { type: item(id).kind === 'movie' ? 'movie' : 'any-episode' },
@@ -249,6 +257,9 @@ describe('the sweep itself', () => {
     expect(violations(card(HIMYM, { service: { serviceId: 'hulu', planId: 'ads', adFree: false } }), req(), ctx)).toContain('rule6');
     expect(violations(card(OFFICE), req(), ctx)).toContain('rule7');
     expect(violations(card(ABBOTT), req(), ctx)).toContain('notTonight');
+    expect(violations(card('tv-48891'), req({ who: 'Together' }), ctx)).toContain('picked');
+    expect(violations(card('tv-48891'), req({ who: 'HG' }), ctx)).toEqual([]);
+    expect(violations(card(GOT), req({ time: 'any', mood: 'gripped' }), ctx)).toEqual([]);
     expect(violations(card(FRIENDS), req(), ctx)).toEqual([]);
   });
 });
@@ -547,10 +558,16 @@ describe('Rule 5: New excludes anything a watcher has seen; Rewatch only include
     expect(deck).not.toContain(OFFICE); // neither
   });
 
-  it('Either: both seen and unseen titles are allowed', () => {
-    const deck = ids(engine.buildDeck(req({ who: 'HG', novelty: 'either' }), makeCtx(), { limit: 100 }));
-    expect(deck).toContain(SCRUBS);
+  // v2: rewritten. 'either' used to deal every seen title alongside the new ones; it now leans new
+  // (about one card in ten is a rewatch), so a particular favourite is no longer guaranteed a place.
+  it('Either: both seen and unseen titles are allowed (it is not a gate), mostly unseen', () => {
+    const ctx = makeCtx();
+    for (const i of [item(SCRUBS), item(OFFICE)]) expect(engine.isEligible(i, req({ who: 'HG', novelty: 'either' }), ctx)).toBe(true);
+    const deck = ids(engine.buildDeck(req({ who: 'HG', novelty: 'either' }), ctx, { limit: 100 }));
+    const seen = deck.filter((id) => engine.hasSeen('HG', id, ctx));
     expect(deck).toContain(OFFICE);
+    expect(seen.length).toBeGreaterThanOrEqual(1);
+    expect(seen.length).toBeLessThan(deck.length / 4);
   });
 
   it('SWEEP: no New card has been seen by a watcher; every Rewatch card has', () => {
@@ -562,7 +579,8 @@ describe('Rule 5: New excludes anything a watcher has seen; Rewatch only include
 describe('Rule 6: when a title is on several of our services, an ad-free one is chosen', () => {
   it('How I Met Your Mother is on Hulu (ads) and Netflix (ad-free): we send them to Netflix', () => {
     expect(engine.chooseService(item(HIMYM), DEFAULT_PLANS)).toEqual({ serviceId: 'netflix', planId: 'standard', adFree: true });
-    const card = engine.buildDeck(req({ who: 'HG' }), makeCtx(), { limit: 100 }).find((c) => c.itemId === HIMYM);
+    // v2: asks for a rewatch (it is HG's favourite), since an 'either' deck no longer deals every seen title.
+    const card = engine.buildDeck(req({ who: 'HG', novelty: 'rewatch' }), makeCtx(), { limit: 100 }).find((c) => c.itemId === HIMYM);
     expect(card?.service).toEqual({ serviceId: 'netflix', planId: 'standard', adFree: true });
   });
 
@@ -666,6 +684,10 @@ describe('Also: "not tonight" and already-dealt cards', () => {
 
   it('SWEEP: no card was swiped "not tonight" today by someone watching', () => {
     expect(sweepFinds('notTonight')).toEqual([]);
+  });
+
+  it('SWEEP: no card was already on the Matches tab for someone watching', () => {
+    expect(sweepFinds('picked')).toEqual([]);
   });
 
   it('ids passed in `exclude` are never returned', () => {

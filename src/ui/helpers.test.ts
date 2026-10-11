@@ -1,16 +1,25 @@
 import { describe, expect, it } from 'vitest';
-import type { DeckCard, TogetherSession } from '../contracts';
+import type { DeckCard, PickEntry, TogetherSession } from '../contracts';
 import {
+  TIME_OPTIONS,
+  filterPicks,
+  formatCount,
   formatDate,
   formatMinutes,
   looseningHints,
   needsToJoin,
   nextUnshownMatch,
+  pickLabel,
   pickText,
+  pickWatchers,
   remainingSessionCards,
   saveOptions,
+  seenSourceNote,
   sessionPosition,
+  sortSeen,
+  timeLabel,
   todayLocal,
+  watchedButtonText,
 } from './helpers';
 
 const card = (id: string): DeckCard => ({
@@ -123,5 +132,80 @@ describe('looseningHints', () => {
     expect(hints.length).toBe(5);
     const open = looseningHints({ who: 'HG', viewing: 'focused', mood: 'laugh', time: 120, novelty: 'either', genre: null });
     expect(open).toEqual(['Try a different mood.']);
+    // "I don't care" has no time limit left to loosen either.
+    expect(looseningHints({ who: 'HG', viewing: 'focused', mood: 'laugh', time: 'any', novelty: 'either', genre: null })).toEqual(['Try a different mood.']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Version 2 helpers
+// ---------------------------------------------------------------------------
+
+const pickEntry = (over: Partial<PickEntry>): PickEntry => ({
+  id: 'p',
+  at: 1,
+  kind: 'solo',
+  who: 'HG',
+  itemId: 'a',
+  snapshot: { title: 'A', year: 2000, poster: null },
+  pick: { type: 'movie' },
+  service: { serviceId: 'netflix', planId: 'standard', adFree: true },
+  ...over,
+});
+
+describe('time options', () => {
+  it("offers 'I don't care' as the fifth choice and labels it", () => {
+    expect(TIME_OPTIONS.map((t) => t.value)).toEqual([20, 45, 60, 120, 'any']);
+    expect(timeLabel('any')).toBe("I don't care");
+  });
+});
+
+describe('matches filter', () => {
+  const picks = [
+    pickEntry({ id: 'm1', at: 5, kind: 'match', who: 'Together' }),
+    pickEntry({ id: 's1', at: 9, who: 'HG' }),
+    pickEntry({ id: 's2', at: 7, who: 'BG' }),
+    pickEntry({ id: 's3', at: 1, who: 'HG' }),
+  ];
+  it('shows everything newest first', () => {
+    expect(filterPicks(picks, 'all', 'HG').map((p) => p.id)).toEqual(['s1', 's2', 'm1', 's3']);
+  });
+  it('Mine = my solo picks; partner = their solo picks; Together = matches', () => {
+    expect(filterPicks(picks, 'mine', 'HG').map((p) => p.id)).toEqual(['s1', 's3']);
+    expect(filterPicks(picks, 'mine', 'BG').map((p) => p.id)).toEqual(['s2']);
+    expect(filterPicks(picks, 'BG', 'HG').map((p) => p.id)).toEqual(['s2']);
+    expect(filterPicks(picks, 'together', 'HG').map((p) => p.id)).toEqual(['m1']);
+  });
+  it('labels picks and decides who is marked watched', () => {
+    expect(pickLabel(pickEntry({ kind: 'match', who: 'Together' }))).toBe('Match');
+    expect(pickLabel(pickEntry({ who: 'BG' }))).toBe('Liked by BG');
+    expect(pickWatchers(pickEntry({ kind: 'match', who: 'Together' }))).toEqual(['HG', 'BG']);
+    expect(pickWatchers(pickEntry({ who: 'BG' }))).toEqual(['BG']);
+    expect(watchedButtonText(pickEntry({ kind: 'match', who: 'Together' }), 'HG')).toBe('We watched this');
+    expect(watchedButtonText(pickEntry({ who: 'HG' }), 'HG')).toBe('I watched this');
+    expect(watchedButtonText(pickEntry({ who: 'BG' }), 'HG')).toBe('BG watched this');
+  });
+});
+
+describe('history rows', () => {
+  it('describes where a watched title came from', () => {
+    expect(seenSourceNote({ source: 'import', plays: 14 })).toBe('Imported · 14 plays');
+    expect(seenSourceNote({ source: 'import', plays: 1 })).toBe('Imported · 1 play');
+    expect(seenSourceNote({ source: 'import' })).toBe('Imported');
+    expect(seenSourceNote({ source: 'manual' })).toBe('Marked watched');
+    expect(seenSourceNote({ source: 'onboarding' })).toBe('From your first-run picks');
+  });
+  it('sorts newest first and filters by a typed search', () => {
+    const rows = [
+      { id: '1', at: 1, title: 'Scrubs' },
+      { id: '2', at: 3, title: 'The Office' },
+      { id: '3', at: 2, title: 'Office Space' },
+    ];
+    expect(sortSeen(rows, '').map((r) => r.id)).toEqual(['2', '3', '1']);
+    expect(sortSeen(rows, '  OFFICE ').map((r) => r.id)).toEqual(['2', '3']);
+    expect(sortSeen(rows, 'zzz')).toEqual([]);
+  });
+  it('formats counts with separators', () => {
+    expect(formatCount(12345)).toBe('12,345');
   });
 });

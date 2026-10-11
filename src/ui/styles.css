@@ -1547,3 +1547,367 @@ ul {
     display: none;
   }
 }
+
+/* ======================================================= version 2 additions */
+input,
+textarea {
+  font: inherit;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* Time row: five options; the odd one out takes the full width instead of floating half-size. */
+.time-row .chip:last-child:nth-child(odd) {
+  max-width: none;
+  flex-basis: 100%;
+}
+.chip-hint {
+  display: block;
+  font-size: 10.5px;
+  font-weight: 500;
+  opacity: 0.8;
+  margin-top: -1px;
+}
+.chip:has(.chip-hint) {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  line-height: 1.1;
+}
+
+/* Tab bar: six tabs. */
+.tabbar button {
+  min-width: 0;
+  padding: 0 2px;
+  font-size: 10.5px;
+  letter-spacing: -0.005em;
+}
+.tab-icon {
+  position: relative;
+  display: grid;
+  place-items: center;
+}
+.tab-dot {
+  position: absolute;
+  top: -1px;
+  right: -4px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px #0e0e14;
+}
+
+/* Toast with an action (Undo). */
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.toast-action {
+  min-height: 44px;
+  margin: -10px -8px -10px 0;
+  padding: 0 12px;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font-weight: 800;
+  font-size: 15px;
+}
+
+/* "Liked N" chip on the solo deck. */
+.page-header-side.right {
+  gap: 8px;
+}
+.liked-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 44px;
+  padding: 0 12px 0 9px;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  background: rgba(255, 61, 87, 0.14);
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.liked-chip strong {
+  font-weight: 850;
+}
+.liked-heart svg {
+  width: 18px;
+  height: 18px;
+  color: var(--accent);
+  fill: var(--accent);
+  display: block;
+  animation: likedBeat 520ms cubic-bezier(0.2, 1.4, 0.3, 1);
+}
+.liked-text {
+  display: inline-block;
+  animation: likedPop 420ms cubic-bezier(0.2, 1.5, 0.3, 1);
+}
+.liked-burst {
+  position: absolute;
+  left: 14px;
+  top: 8px;
+  color: var(--accent);
+  font-size: 16px;
+  pointer-events: none;
+  opacity: 0;
+  animation: likedFloat 700ms ease-out;
+}
+@keyframes likedBeat {
+  0% { transform: scale(1); }
+  35% { transform: scale(1.7); }
+  100% { transform: scale(1); }
+}
+@keyframes likedPop {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.25); }
+  100% { transform: scale(1); }
+}
+@keyframes likedFloat {
+  0% { opacity: 1; transform: translateY(0) scale(0.8); }
+  100% { opacity: 0; transform: translateY(-26px) scale(1.6); }
+}
+
+/* Section titles on the New tab. */
+.section-title {
+  font-size: 13px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+}
+.followups {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 4px;
+}
+.tag-solo {
+  border: 1px solid var(--line);
+  color: var(--text);
+}
+.faint {
+  opacity: 0.75;
+  font-size: 12.5px;
+}
+.hint.tight {
+  margin-top: -4px;
+}
+.detail-what {
+  font-weight: 750;
+  font-size: 15px;
+  margin-top: 6px;
+}
+.row-poster.small {
+  width: 46px;
+  height: 69px;
+}
+.row-remove {
+  flex: none;
+  color: var(--muted);
+}
+.row-remove svg {
+  width: 20px;
+  height: 20px;
+}
+
+/* Search box and "add" buttons. */
+.search-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 0 14px;
+  border-radius: 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--muted);
+}
+.search-box svg {
+  width: 20px;
+  height: 20px;
+  flex: none;
+}
+.search-box:focus-within {
+  border-color: var(--accent);
+}
+.search-box input {
+  flex: 1;
+  min-width: 0;
+  min-height: 46px;
+  background: none;
+  border: 0;
+  outline: none;
+  color: var(--text);
+  font-size: 16px; /* 16px stops iOS zooming into the field */
+  -webkit-appearance: none;
+  appearance: none;
+}
+.add-watched {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 16px;
+}
+.add-watched svg {
+  width: 20px;
+  height: 20px;
+}
+.add-results {
+  margin: 10px 0 14px;
+}
+.add-state {
+  flex: none;
+  font-weight: 800;
+  color: var(--accent);
+  padding: 0 4px;
+}
+.add-state.done {
+  color: var(--ok);
+}
+.row:disabled {
+  opacity: 0.8;
+}
+.inline-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--muted);
+  padding: 14px 4px;
+  font-size: 15px;
+}
+
+/* Import. */
+.steps {
+  margin: 4px 0 8px;
+  padding-left: 20px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text);
+  list-style: decimal;
+}
+.steps li {
+  margin: 2px 0;
+}
+.import-howto {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.file-pick {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  overflow: hidden;
+}
+.file-pick svg {
+  width: 22px;
+  height: 22px;
+}
+.file-pick input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+.center {
+  text-align: center;
+}
+.paste-box {
+  width: 100%;
+  resize: vertical;
+  min-height: 96px;
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--surface2);
+  color: var(--text);
+  font-size: 16px;
+  line-height: 1.4;
+  outline: none;
+}
+.paste-box:focus {
+  border-color: var(--accent);
+}
+.import-headline {
+  font-size: 18px;
+  font-weight: 800;
+  line-height: 1.25;
+}
+.import-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.import-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+.top-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 0;
+  border-top: 1px solid var(--line);
+  font-size: 14.5px;
+}
+.top-list li span:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.top-list li .muted {
+  flex: none;
+  white-space: nowrap;
+}
+.unmatched {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+.unmatched .top-list {
+  width: 100%;
+}
+.notice.ok {
+  background: rgba(61, 220, 151, 0.12);
+  border: 1px solid rgba(61, 220, 151, 0.45);
+}
+.notice p + .btn,
+.notice p + .btn-link {
+  margin-top: 10px;
+}
+.toast {
+  width: max-content;
+}
+.followup-text {
+  flex-basis: 100%;
+  color: var(--accent);
+  font-weight: 800;
+  font-size: 15px;
+  line-height: 1.25;
+}
+.followup-facts {
+  flex-basis: 100%;
+}
+.sheet > .sheet-option {
+  width: 100%;
+}
+.search-box input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+}

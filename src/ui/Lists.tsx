@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { WatchlistEntry, WatchlistOwner } from '../contracts';
 import { AdBadge, Header, Poster, Segmented, ServiceLine, Sheet } from './components';
 import { useApp } from './context';
-import { formatDate, otherPerson, pickText, serviceName, whoLabel } from './helpers';
+import { otherPerson, serviceName } from './helpers';
 
 type WTab = 'mine' | 'hers' | 'ours';
 
@@ -27,7 +27,7 @@ export function Watchlist() {
   const seen = async (e: WatchlistEntry) => {
     try {
       const who = e.list === 'ours' ? me : e.list;
-      await sync.setSeen(who, [e.itemId], true);
+      await sync.markWatched(who, [{ itemId: e.itemId, source: 'manual', snapshot: e.snapshot }]);
       await sync.removeFromWatchlist(e.list, e.itemId);
       setOpen(null);
     } catch {
@@ -113,45 +113,6 @@ export function Watchlist() {
             </button>
           </div>
         </Sheet>
-      )}
-    </div>
-  );
-}
-
-export function History() {
-  const { state, itemById } = useApp();
-  const rows = state.history;
-  return (
-    <div className="screen with-tabs scroll" data-testid="history">
-      <Header title="History" subtitle="Every match and every pick" />
-      {rows.length === 0 ? (
-        <p className="empty-note" data-testid="history-empty">
-          Nothing yet. When you match or pick something to watch, it lands here.
-        </p>
-      ) : (
-        <ul className="rows">
-          {rows.map((h) => {
-            const item = itemById(h.itemId);
-            return (
-              <li key={h.id}>
-                <div className="row static" data-testid="history-row" data-kind={h.kind} data-item-id={h.itemId}>
-                  <Poster title={h.snapshot.title} poster={item?.poster ?? h.snapshot.poster} size="w185" compact className="row-poster" />
-                  <span className="row-body">
-                    <span className="row-title" data-testid="history-title">{h.snapshot.title}</span>
-                    <span className="row-sub">
-                      <span data-testid="history-date">{formatDate(h.at)}</span> {'•'} <span data-testid="history-who">{whoLabel(h.who)}</span>{' '}
-                      {'•'} {h.kind === 'match' ? 'Match' : 'Pick'}
-                    </span>
-                    <span className="row-sub" data-testid="history-pick">{pickText(h.pick)}</span>
-                    <span className="row-sub" data-testid="history-where">
-                      {serviceName(h.service.serviceId)} <AdBadge service={h.service} testId="history-ad-badge" />
-                    </span>
-                  </span>
-                </div>
-              </li>
-            );
-          })}
-        </ul>
       )}
     </div>
   );

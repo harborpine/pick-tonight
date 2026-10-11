@@ -1,37 +1,135 @@
-import { useMemo, useState } from 'react';
-import type { NewCard, SwipeAction, Who, WatchlistOwner } from '../contracts';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import type { CatalogItem, DeckCard, Engine, EngineContext, FollowUp, NewCard, SwipeAction, Who, WatchlistOwner } from '../contracts';
 import { Header, Icon, Poster, Segmented, ServiceLine, Sheet } from './components';
 import { useApp } from './context';
 import { formatDate, formatMinutes, pickText, saveOptions } from './helpers';
 
 const PAGE = 40;
 
+type Acting = { card: DeckCard; key: string };
+
+function safeFollowUps(engine: Engine, who: Who, ctx: EngineContext): FollowUp[] {
+  try {
+    return engine.followUps(who, ctx);
+  } catch {
+    return [];
+  }
+}
+
+/** Poster, title lines and the five action buttons, shared by follow-ups and the New feed. */
+function ActionRow({
+  item,
+  card,
+  rowProps,
+  meta,
+  note,
+  onAct,
+  onSave,
+  onNever,
+  prefix,
+}: {
+  item: CatalogItem;
+  card: DeckCard;
+  rowProps: Record<string, string | undefined>;
+  meta: ReactNode;
+  note?: ReactNode;
+  onAct: (action: SwipeAction) => void;
+  onSave: () => void;
+  onNever: () => void;
+  prefix: 'new' | 'followup';
+}) {
+  return (
+    <div className="row static newrow" data-testid={`${prefix}-row`} data-item-id={item.id} {...rowProps}>
+      <div className="newrow-top">
+        <Poster title={item.title} year={item.year} poster={item.poster} size="w185" compact className="row-poster" />
+        <span className="row-body">
+          <span className="row-title" data-testid={`${prefix}-title`}>{item.title}</span>
+          <span className="row-sub">{meta}</span>
+          <span className="row-sub" data-testid={`${prefix}-pick`}>{pickText(card.pick)}</span>
+          <span className="row-sub"><ServiceLine service={card.service} prefix={`${prefix}-service`} /></span>
+          {note}
+        </span>
+      </div>
+      <div className="mini-actions">
+        <button type="button" className="mini mini-yes" data-testid={`${prefix}-yes`} onClick={() => onAct('yes')}>
+          {Icon.heart}
+          <span>Yes</span>
+        </button>
+        <button type="button" className="mini" data-testid={`${prefix}-not-tonight`} onClick={() => onAct('not-tonight')}>
+          {Icon.close}
+          <span>Not tonight</span>
+        </button>
+        <button type="button" className="mini" data-testid={`${prefix}-seen`} onClick={() => onAct('seen')}>
+          {Icon.eye}
+          <span>Seen</span>
+        </button>
+        <button type="button" className="mini" data-testid={`${prefix}-save`} onClick={onSave}>
+          {Icon.bookmark}
+          <span>Save</span>
+        </button>
+        <button type="button" className="mini" data-testid={`${prefix}-never`} onClick={onNever}>
+          {Icon.ban}
+          <span>Never</span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function NewFeed() {
-  const { services, state, me, engineCtx, itemById, perform } = useApp();
+  const { services, state, me, engineCtx, itemById, perform, toast, followUpsShown } = useApp();
   const { engine, newArrivals } = services;
-  const [whoSel, setWhoSel] = useState<'me' | 'Together'>('me');
+
+  // Start on "Together" only when that is where this phone's follow-ups are.
+  const [whoSel, setWhoSel] = useState<'me' | 'Together'>(() => {
+    const ctx = engineCtx();
+    return safeFollowUps(engine, me, ctx).length === 0 && safeFollowUps(engine, 'Together', ctx).length > 0 ? 'Together' : 'me';
+  });
   const who: Who = whoSel === 'me' ? me : 'Together';
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const [shown, setShown] = useState(PAGE);
-  const [saveFor, setSaveFor] = useState<NewCard | null>(null);
-  const [neverFor, setNeverFor] = useState<NewCard | null>(null);
+  const [fShown, setFShown] = useState(6);
+  const [saveFor, setSaveFor] = useState<Acting | null>(null);
+  const [neverFor, setNeverFor] = useState<Acting | null>(null);
+
+  // Everything the engine reads; the lists below rebuild when any of it changes.
+  const deps = [engine, who, state.seen, state.never, state.notTonight, state.profiles, state.settings, state.picks];
 
   const ranked = useMemo(
     () => engine.rankNewArrivals(newArrivals, who, engineCtx()),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [engine, newArrivals, who, state.seen, state.never, state.notTonight, state.profiles, state.settings],
+    [...deps, newArrivals],
   );
-  const rows = ranked.filter((c) => !hidden.has(`${c.arrival.itemId}-${c.arrival.season ?? ''}`));
-  const keyOf = (c: NewCard) => `${c.arrival.itemId}-${c.arrival.season ?? ''}`;
+  const followUps = useMemo(
+    () => safeFollowUps(engine, who, engineCtx()),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    deps,
+  );
 
-  const act = (c: NewCard, action: SwipeAction, list?: WatchlistOwner) => {
-    const item = itemById(c.itemId);
+  const keyOf = (c: NewCard) => `${c.arrival.itemId}-${c.arrival.season ?? ''}`;
+  const fRows = followUps.filter((f) => !hidden.has(`fu:${f.key}`));
+  const fIds = new Set(fRows.map((f) => f.itemId));
+  // A title shown under "Because you watched" is not repeated in the general list.
+  const rows = ranked.filter((c) => !hidden.has(`new:${keyOf(c)}`) && !fIds.has(c.itemId));
+
+  // The follow-up section being on screen clears the dot on the New tab (for both "me" and "Together").
+  useEffect(() => {
+    if (fRows.length === 0) return;
+    const ctx = engineCtx();
+    const keys = new Set<string>([...fRows.map((f) => f.key), ...safeFollowUps(engine, me, ctx).map((f) => f.key), ...safeFollowUps(engine, 'Together', ctx).map((f) => f.key)]);
+    followUpsShown([...keys]);
+  }, [fRows.map((f) => f.key).join('|')]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const act = (hideKey: string, itemId: string, card: DeckCard, action: SwipeAction, list?: WatchlistOwner) => {
+    const item = itemById(itemId);
     if (!item) return;
-    setHidden((h) => new Set(h).add(keyOf(c)));
-    void perform({ item, pick: c.pick, service: c.service, action, who, list });
+    setHidden((h) => new Set(h).add(hideKey));
+    void perform({ item, pick: card.pick, service: card.service, action, who, list });
+    if (action === 'yes') toast('Added to Matches');
   };
 
   const save = saveOptions(me, who);
+  const neverText = 'It will be hidden for you from now on. You can undo this later in Us.';
 
   return (
     <div className="screen with-tabs scroll" data-testid="new-feed">
@@ -45,6 +143,48 @@ export function NewFeed() {
           { value: 'Together', label: 'Together' },
         ]}
       />
+
+      {fRows.length > 0 && (
+        <section className="followups" data-testid="followups">
+          <h2 className="section-title" data-testid="followups-title">Because you watched{'…'}</h2>
+          <ul className="rows new-rows">
+            {fRows.slice(0, fShown).map((f) => {
+              const item = itemById(f.itemId);
+              if (!item) return null;
+              return (
+                <li key={f.key}>
+                  <ActionRow
+                    prefix="followup"
+                    item={item}
+                    card={f}
+                    rowProps={{ 'data-key': f.key, 'data-type': f.type }}
+                    meta={
+                      <>
+                        <span className="followup-text" data-testid="followup-text">{f.text}</span>
+                        <span className="followup-facts">
+                          {f.date && <span data-testid="followup-date">{formatDate(f.date)} {'•'} </span>}
+                          {item.year} {'•'} {formatMinutes(f.minutes)}
+                        </span>
+                      </>
+                    }
+                    onAct={(a) => act(`fu:${f.key}`, f.itemId, f, a)}
+                    onSave={() => setSaveFor({ card: f, key: `fu:${f.key}` })}
+                    onNever={() => setNeverFor({ card: f, key: `fu:${f.key}` })}
+                  />
+                </li>
+              );
+            })}
+          </ul>
+          {fRows.length > fShown && (
+            <button type="button" className="btn btn-ghost btn-block" data-testid="followups-more" onClick={() => setFShown((n) => n + 1000)}>
+              Show more ({fRows.length - fShown} left)
+            </button>
+          )}
+        </section>
+      )}
+
+      {fRows.length > 0 && rows.length > 0 && <h2 className="section-title" data-testid="new-section-title">New on your services</h2>}
+
       {rows.length === 0 ? (
         <p className="empty-note" data-testid="new-empty">
           Nothing new for {whoSel === 'me' ? 'you' : 'both of you'} right now. Check back after the next daily update.
@@ -57,43 +197,22 @@ export function NewFeed() {
             const label = c.arrival.type === 'season' ? `New season${c.arrival.season ? ` ${c.arrival.season}` : ''}` : 'New';
             return (
               <li key={keyOf(c)}>
-                <div className="row static newrow" data-testid="new-row" data-item-id={c.itemId} data-type={c.arrival.type}>
-                  <div className="newrow-top">
-                    <Poster title={item.title} year={item.year} poster={item.poster} size="w185" compact className="row-poster" />
-                    <span className="row-body">
-                      <span className="row-title" data-testid="new-title">{item.title}</span>
-                      <span className="row-sub">
-                        <span className={`tag ${c.arrival.type === 'season' ? 'tag-season' : 'tag-new'}`} data-testid="new-label">{label}</span>{' '}
-                        <span data-testid="new-date">{formatDate(c.arrival.date)}</span> {'•'} {item.year} {'•'} {formatMinutes(c.minutes)}
-                      </span>
-                      <span className="row-sub" data-testid="new-pick">{pickText(c.pick)}</span>
-                      <span className="row-sub"><ServiceLine service={c.service} prefix="new-service" /></span>
-                      {c.reasons[0] && <span className="row-reason">{c.reasons[0]}</span>}
-                    </span>
-                  </div>
-                  <div className="mini-actions">
-                    <button type="button" className="mini mini-yes" data-testid="new-yes" onClick={() => act(c, 'yes')}>
-                      {Icon.heart}
-                      <span>Yes</span>
-                    </button>
-                    <button type="button" className="mini" data-testid="new-not-tonight" onClick={() => act(c, 'not-tonight')}>
-                      {Icon.close}
-                      <span>Not tonight</span>
-                    </button>
-                    <button type="button" className="mini" data-testid="new-seen" onClick={() => act(c, 'seen')}>
-                      {Icon.eye}
-                      <span>Seen</span>
-                    </button>
-                    <button type="button" className="mini" data-testid="new-save" onClick={() => setSaveFor(c)}>
-                      {Icon.bookmark}
-                      <span>Save</span>
-                    </button>
-                    <button type="button" className="mini" data-testid="new-never" onClick={() => setNeverFor(c)}>
-                      {Icon.ban}
-                      <span>Never</span>
-                    </button>
-                  </div>
-                </div>
+                <ActionRow
+                  prefix="new"
+                  item={item}
+                  card={c}
+                  rowProps={{ 'data-type': c.arrival.type }}
+                  meta={
+                    <>
+                      <span className={`tag ${c.arrival.type === 'season' ? 'tag-season' : 'tag-new'}`} data-testid="new-label">{label}</span>{' '}
+                      <span data-testid="new-date">{formatDate(c.arrival.date)}</span> {'•'} {item.year} {'•'} {formatMinutes(c.minutes)}
+                    </>
+                  }
+                  note={c.reasons[0] ? <span className="row-reason">{c.reasons[0]}</span> : undefined}
+                  onAct={(a) => act(`new:${keyOf(c)}`, c.itemId, c, a)}
+                  onSave={() => setSaveFor({ card: c, key: `new:${keyOf(c)}` })}
+                  onNever={() => setNeverFor({ card: c, key: `new:${keyOf(c)}` })}
+                />
               </li>
             );
           })}
@@ -115,9 +234,9 @@ export function NewFeed() {
                 className={`sheet-option ${o.list === save.defaultList ? 'primary' : ''}`}
                 data-testid={`save-option-${o.list}`}
                 onClick={() => {
-                  const c = saveFor;
+                  const a = saveFor;
                   setSaveFor(null);
-                  act(c, 'save', o.list);
+                  act(a.key, a.card.itemId, a.card, 'save', o.list);
                 }}
               >
                 {o.label}
@@ -128,16 +247,16 @@ export function NewFeed() {
       )}
       {neverFor && (
         <Sheet testId="never-sheet" title="Never show this again?" onClose={() => setNeverFor(null)}>
-          <p className="sheet-text" data-testid="never-text">It will be hidden for you from now on. You can undo this later in Us.</p>
+          <p className="sheet-text" data-testid="never-text">{neverText}</p>
           <div className="sheet-options">
             <button
               type="button"
               className="sheet-option danger"
               data-testid="never-confirm"
               onClick={() => {
-                const c = neverFor;
+                const a = neverFor;
                 setNeverFor(null);
-                act(c, 'never');
+                act(a.key, a.card.itemId, a.card, 'never');
               }}
             >
               Yes, never

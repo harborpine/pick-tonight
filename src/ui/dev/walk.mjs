@@ -5,7 +5,7 @@ import { mkdirSync } from 'node:fs';
 
 const out = process.argv[2] ?? 'shots';
 mkdirSync(out, { recursive: true });
-const URL = 'http://localhost:5173/what-to-watch/?catalog=fixture&sync=memory';
+const URL = process.argv[3] ?? 'http://localhost:5173/what-to-watch/?catalog=fixture&sync=memory';
 
 const browser = await chromium.launch();
 const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, hasTouch: true, isMobile: true });
@@ -78,13 +78,9 @@ await tid('never-cancel').click();
 await tid('action-seen').click();
 await page.waitForTimeout(450);
 await tid('action-yes').click();
-await tid('pick-screen').waitFor();
 await page.waitForTimeout(700);
-await shot('11-pick');
-await tid('pick-keep').click();
-await page.waitForTimeout(300);
-await tid('action-yes').click();
-await tid('pick-done').click();
+await shot('11-liked-chip'); // solo yes stays on the deck now
+await tid('deck-back').click();
 await tid('ask').waitFor();
 
 // together

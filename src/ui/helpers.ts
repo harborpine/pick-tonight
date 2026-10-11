@@ -5,6 +5,8 @@ import {
   type CatalogItem,
   type DeckCard,
   type PersonId,
+  type PickEntry,
+  type SeenEntry,
   type ServiceChoice,
   type ServiceId,
   type SuggestRequest,
@@ -86,6 +88,7 @@ export const TIME_OPTIONS: { value: SuggestRequest['time']; label: string }[] = 
   { value: 45, label: '45 min' },
   { value: 60, label: '1 hr' },
   { value: 120, label: '2+ hrs' },
+  { value: 'any', label: "I don't care" },
 ];
 
 export function timeLabel(t: SuggestRequest['time']): string {
@@ -101,6 +104,67 @@ export function hueFor(text: string): number {
   let h = 0;
   for (let i = 0; i < text.length; i++) h = (h * 31 + text.charCodeAt(i)) >>> 0;
   return h % 360;
+}
+
+// ---------------------------------------------------------------------------
+// Matches (picks) and History (watched)
+// ---------------------------------------------------------------------------
+
+export type MatchesFilter = 'all' | 'mine' | PersonId | 'together';
+
+/** Which picks a Matches filter shows, newest first. 'mine' = solo picks for me; a person's initials = solo picks for them; 'together' = matches and picks for both. */
+export function filterPicks(picks: PickEntry[], filter: MatchesFilter, me: PersonId): PickEntry[] {
+  const sorted = [...picks].sort((a, b) => b.at - a.at);
+  switch (filter) {
+    case 'all':
+      return sorted;
+    case 'mine':
+      return sorted.filter((p) => p.kind === 'solo' && p.who === me);
+    case 'together':
+      return sorted.filter((p) => p.kind === 'match' || p.who === 'Together');
+    default:
+      return sorted.filter((p) => p.kind === 'solo' && p.who === filter);
+  }
+}
+
+/** "Match" for Together matches, otherwise "Liked by HG". */
+export function pickLabel(p: Pick<PickEntry, 'kind' | 'who'>): string {
+  return p.kind === 'match' ? 'Match' : `Liked by ${whoLabel(p.who)}`;
+}
+
+/** Who gets marked as having watched a pick. */
+export function pickWatchers(p: Pick<PickEntry, 'kind' | 'who'>): PersonId[] {
+  return p.kind === 'match' || p.who === 'Together' ? ['HG', 'BG'] : [p.who as PersonId];
+}
+
+/** The text on the "I watched this" button. */
+export function watchedButtonText(p: Pick<PickEntry, 'kind' | 'who'>, me: PersonId): string {
+  if (p.kind === 'match' || p.who === 'Together') return 'We watched this';
+  return p.who === me ? 'I watched this' : `${p.who} watched this`;
+}
+
+/** A small note about how something got onto the watched list. */
+export function seenSourceNote(e: Pick<SeenEntry, 'source' | 'plays'>): string {
+  switch (e.source) {
+    case 'import':
+      return e.plays && e.plays > 0 ? `Imported · ${e.plays} ${e.plays === 1 ? 'play' : 'plays'}` : 'Imported';
+    case 'onboarding':
+      return 'From your first-run picks';
+    default:
+      return 'Marked watched';
+  }
+}
+
+/** Watched rows, newest first, optionally filtered by a typed search over the title. */
+export function sortSeen<T extends { at: number; title: string }>(rows: T[], query: string): T[] {
+  const q = query.trim().toLowerCase();
+  const kept = q ? rows.filter((r) => r.title.toLowerCase().includes(q)) : rows.slice();
+  return kept.sort((a, b) => b.at - a.at);
+}
+
+/** 1234 -> "1,234". */
+export function formatCount(n: number): string {
+  return n.toLocaleString('en-US');
 }
 
 // ---------------------------------------------------------------------------
@@ -167,7 +231,7 @@ export function saveOptions(me: PersonId, who: Who): { options: SaveOption[]; de
 
 export function looseningHints(req: SuggestRequest): string[] {
   const hints: string[] = [];
-  if (req.time !== 120) hints.push('Give it more time — longer titles open up at 1 hr or 2+ hrs.');
+  if (req.time !== 120 && req.time !== 'any') hints.push('Give it more time — longer titles open up at 1 hr or 2+ hrs.');
   if (req.novelty !== 'either') hints.push('Pick “Either” for new or rewatch.');
   if (req.viewing !== 'focused') hints.push('Try “Focused” — it allows the trickier shows and movies.');
   if (req.genre) hints.push('Clear the genre craving.');

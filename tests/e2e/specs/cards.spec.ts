@@ -57,13 +57,17 @@ test('card content: poster, title, year, length, service + Ad-free/Ads, and ever
 
 test('card content: specific titles show the right "what to watch"', async ({ page }) => {
   await startMemoryPhone(page);
-  await askSolo(page, { who: 'HG', viewing: 'focused', mood: 'laugh', time: 120, novelty: 'either' });
+  // v2: "Either" leans new, so the seen favourites (Family Guy, Scrubs, Disenchantment) are asked for as Rewatch, Knives Out as New.
+  await askSolo(page, { who: 'HG', viewing: 'focused', mood: 'laugh', time: 120, novelty: 'rewatch' });
   const cards = await pageThroughDeck(page);
   const byId = Object.fromEntries(cards.map((c) => [c.id, c]));
   expect(byId['tv-1434'].pick).toMatch(FORMS.any); // Family Guy: drop-in
   expect(byId['tv-73021'].pick).toMatch(FORMS.series); // Disenchantment: a story to start from the beginning
-  expect(byId['movie-546554'].pick).toMatch(FORMS.movie); // Knives Out
   expect(byId['tv-4556'].pick).toMatch(/^(Put on any episode|Season 3, Episode 14 . .My Screw Up.)$/); // Scrubs: drop-in with a standout
+  await tid(page, 'empty-back').click();
+  await askSolo(page, { novelty: 'new' });
+  const fresh = Object.fromEntries((await pageThroughDeck(page)).map((c) => [c.id, c]));
+  expect(fresh['movie-546554'].pick).toMatch(FORMS.movie); // Knives Out
 });
 
 test('card content: placeholder poster is drawn, "i" shows the description, a quick tap does not act', async ({ page }) => {
@@ -84,31 +88,38 @@ test('card content: placeholder poster is drawn, "i" shows the description, a qu
 // Each card action
 // ---------------------------------------------------------------------------
 
-test('Yes (solo): "tonight you are watching" screen, then a solo pick in History', async ({ page }) => {
+test('Yes (solo): the deck carries on (no screen change), "Liked" counts up, the tap opens Matches with the pick', async ({ page }) => {
   await startMemoryPhone(page);
   await askSolo(page, { who: 'HG', mood: 'laugh', time: 120 });
+  await expect(tid(page, 'liked-chip')).toHaveCount(0);
   const c = await readCard(page);
   await tid(page, 'action-yes').click();
-  const pick = tid(page, 'pick-screen');
-  await expect(pick).toBeVisible();
-  await expect(pick).toHaveAttribute('data-item-id', c.id);
-  await expect(tid(page, 'pick-title')).toHaveText(c.title);
-  await expect(tid(page, 'pick-what')).toHaveText(c.pick);
-  await expect(tid(page, 'pick-service')).toHaveText(c.service);
-  await expect(tid(page, 'pick-ad-badge')).toHaveAttribute('data-adfree', String(c.adFree));
-  await tid(page, 'pick-done').click();
+  // no navigation, no full-screen overlay: the next card is simply showing
+  await expect(tid(page, 'solo-deck')).toBeVisible();
   await expect(tid(page, 'pick-screen')).toHaveCount(0);
-  await expect(tid(page, 'ask')).toBeVisible();
+  await expect(tid(page, 'match-screen')).toHaveCount(0);
+  await expect(page.locator(`[data-testid="card"][data-item-id="${c.id}"]`)).toHaveCount(0);
+  const next = await readCard(page);
+  expect(next.id).not.toBe(c.id);
+  await expect(tid(page, 'liked-chip')).toHaveAttribute('data-count', '1');
+  await expect(tid(page, 'liked-count')).toHaveText('1');
+  await act(page, 'yes');
+  await expect(tid(page, 'liked-count')).toHaveText('2');
 
-  await openTab(page, 'history');
-  const row = page.locator(`[data-testid="history-row"][data-item-id="${c.id}"]`);
+  await tid(page, 'liked-chip').click();
+  await expect(tid(page, 'matches')).toBeVisible();
+  const row = page.locator(`[data-testid="match-row"][data-item-id="${c.id}"]`);
   await expect(row).toHaveCount(1);
   await expect(row).toHaveAttribute('data-kind', 'solo');
-  await expect(row.getByTestId('history-title')).toHaveText(c.title);
-  await expect(row.getByTestId('history-who')).toHaveText('HG');
-  await expect(row.getByTestId('history-pick')).toHaveText(c.pick);
-  await expect(row.getByTestId('history-where')).toContainText(c.service);
-  await expect(row.getByTestId('history-date')).not.toHaveText('');
+  await expect(row.getByTestId('match-title')).toHaveText(c.title);
+  await expect(row.getByTestId('match-label')).toContainText('HG');
+  await expect(row.getByTestId('match-pick')).toHaveText(c.pick);
+  await expect(row.getByTestId('match-where')).toContainText(c.service);
+  await expect(row.getByTestId('match-date')).not.toHaveText('');
+  // a right-swipe is not "watched"
+  expect(Object.keys((await sharedState(page)).seen.HG)).not.toContain(c.id);
+  await openTab(page, 'history');
+  await expect(page.locator(`[data-testid="history-row"][data-item-id="${c.id}"]`)).toHaveCount(0);
 });
 
 test('Yes by a real swipe right = yes; swipe left = not tonight; an early release springs back', async ({ page }) => {
@@ -135,7 +146,11 @@ test('Yes by a real swipe right = yes; swipe left = not tonight; an early releas
   expect(st.notTonight.HG[a.id]).toBe(todayLocal());
   // swipe right
   await swipeCard(page, 'right');
-  await expect(tid(page, 'pick-screen')).toHaveAttribute('data-item-id', b.id);
+  await expect(tid(page, 'pick-screen')).toHaveCount(0);
+  await expect(tid(page, 'solo-deck')).toBeVisible();
+  await expect(tid(page, 'liked-count')).toHaveText('1');
+  expect((await readCard(page)).id).not.toBe(b.id);
+  expect((await sharedState(page)).picks.map((p: { itemId: string }) => p.itemId)).toContain(b.id);
 });
 
 test('Not tonight: the card goes away, and a new identical request the same day does not show it', async ({ page }) => {
@@ -261,7 +276,7 @@ test('Never: asks first; cancel keeps the card; confirm hides it for that person
   expect((await engineDeck(page, { ...REQ, who: 'HG' }, '2099-01-01')).map((c) => c.id)).toContain(x.id);
 });
 
-test('Together on one phone (memory): the other person can be simulated; both-yes makes a match entry', async ({ page }) => {
+test('Together on one phone (memory): the other person can be simulated; both-yes makes a Matches entry', async ({ page }) => {
   // Single-device smoke test of the session UI (the real two-phone version is in together.spec.ts).
   await startMemoryPhone(page);
   await tid(page, 'ask-who-Together').click();
@@ -282,6 +297,8 @@ test('Together on one phone (memory): the other person can be simulated; both-ye
   await expect(tid(page, 'match-screen')).toHaveAttribute('data-item-id', c.id);
   await expect(tid(page, 'match-service')).toHaveText(c.service);
   await tid(page, 'match-keep').click();
+  await openTab(page, 'matches');
+  await expect(page.locator(`[data-testid="match-row"][data-item-id="${c.id}"]`)).toHaveAttribute('data-kind', 'match');
   await openTab(page, 'history');
-  await expect(page.locator(`[data-testid="history-row"][data-item-id="${c.id}"]`)).toHaveAttribute('data-kind', 'match');
+  await expect(page.locator(`[data-testid="history-row"][data-item-id="${c.id}"]`)).toHaveCount(0);
 });

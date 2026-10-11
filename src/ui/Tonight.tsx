@@ -38,10 +38,10 @@ const VIEWING: { value: ViewingType; label: string }[] = [
   { value: 'background', label: 'Background' },
   { value: 'eating', label: 'While eating' },
 ];
-const NOVELTY: { value: Novelty; label: string }[] = [
+const NOVELTY: { value: Novelty; label: string; hint?: string }[] = [
   { value: 'new', label: 'New' },
   { value: 'rewatch', label: 'Rewatch' },
-  { value: 'either', label: 'Either' },
+  { value: 'either', label: 'Either', hint: 'mostly new' },
 ];
 
 function summary(r: SuggestRequest): string {
@@ -106,7 +106,7 @@ function Ask() {
       writeLocal(`wtw.ui.ask.v1.${me}`, req);
       const deck = engine.buildDeck(req, engineCtx(), { seed: randomSeed() });
       if (deck.length === 0) {
-        setSolo({ request: req, cards: [], dealt: 0 });
+        setSolo({ request: req, cards: [], dealt: 0, liked: 0 });
         return;
       }
       if (req.who === 'Together') {
@@ -114,7 +114,7 @@ function Ask() {
         setSessionLeft(false);
         setSolo(null);
       } else {
-        setSolo({ request: req, cards: deck, dealt: deck.length });
+        setSolo({ request: req, cards: deck, dealt: deck.length, liked: 0 });
         setSessionLeft(true);
       }
     } catch {
@@ -178,7 +178,7 @@ function Ask() {
 
       <section className="ask-group" data-testid="ask-group-time">
         <h2>Time</h2>
-        <div className="chip-row wrap">
+        <div className="chip-row wrap time-row">
           {TIME_OPTIONS.map((t) => (
             <Chip small key={t.value} selected={req.time === t.value} testId={`ask-time-${t.value}`} onClick={() => set('time', t.value)}>
               {t.label}
@@ -193,6 +193,11 @@ function Ask() {
           {NOVELTY.map((n) => (
             <Chip key={n.value} selected={req.novelty === n.value} testId={`ask-novelty-${n.value}`} onClick={() => set('novelty', n.value)}>
               {n.label}
+              {n.hint && (
+                <small className="chip-hint" data-testid={`ask-novelty-${n.value}-hint`}>
+                  {n.hint}
+                </small>
+              )}
             </Chip>
           ))}
         </div>
@@ -254,8 +259,21 @@ function EmptyDeck({ request, ranOut, onBack }: { request: SuggestRequest; ranOu
 // Solo deck
 // ---------------------------------------------------------------------------
 
+/** "Liked N": counts right-swipes in this deck; pulses and floats a heart each time it goes up. Tap = Matches tab. */
+function LikedChip({ count, onOpen }: { count: number; onOpen: () => void }) {
+  return (
+    <button type="button" className="liked-chip" data-testid="liked-chip" data-count={count} aria-label={`Liked ${count}. Open Matches`} onClick={onOpen}>
+      <span key={`h${count}`} className="liked-heart">{Icon.heart}</span>
+      <span key={`n${count}`} className="liked-text">
+        Liked <strong data-testid="liked-count">{count}</strong>
+      </span>
+      <span key={`b${count}`} className="liked-burst" aria-hidden="true">{'♥'}</span>
+    </button>
+  );
+}
+
 function SoloView() {
-  const { solo, setSolo, me, perform, itemById } = useApp();
+  const { solo, setSolo, me, perform, itemById, goTab } = useApp();
   const resetKey = useMemo(() => String(Math.random()), [solo?.request]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!solo) return null;
   const { request } = solo;
@@ -280,7 +298,12 @@ function SoloView() {
             {Icon.back}
           </button>
         }
-        right={cards.length > 0 ? <span className="count" data-testid="deck-count">{cards.length} left</span> : undefined}
+        right={
+          <>
+            {solo.liked > 0 && <LikedChip count={solo.liked} onOpen={() => goTab('matches')} />}
+            {cards.length > 0 && <span className="count" data-testid="deck-count">{cards.length} left</span>}
+          </>
+        }
       />
       <SwipeDeck
         cards={cards}
@@ -290,7 +313,9 @@ function SoloView() {
         empty={<EmptyDeck request={request} ranOut={solo.dealt > 0} onBack={() => setSolo(null)} />}
         onAction={(sc, action, list) => {
           void perform({ item: sc.item, pick: sc.card.pick, service: sc.card.service, action, who, list });
-          setSolo((s) => (s ? { ...s, cards: s.cards.filter((c) => c.itemId !== sc.card.itemId) } : s));
+          setSolo((s) =>
+            s ? { ...s, cards: s.cards.filter((c) => c.itemId !== sc.card.itemId), liked: s.liked + (action === 'yes' ? 1 : 0) } : s,
+          );
         }}
       />
     </div>

@@ -1,0 +1,155 @@
+/**
+ * A hand-written Netflix "viewing activity" file in the shapes Netflix really
+ * uses (season markers, "Limited Series", "Part 1", "Volume 2", "Collection",
+ * the show's name repeated with a number, "(U.S.)", films and specials with
+ * colons in their names, a few foreign titles). Used by dev/review.ts to
+ * measure how much of a realistic history the matcher finds in the real title
+ * lookup. The titles are written from memory of how Netflix lists them, NOT
+ * copied from the lookup, so the match rate means something.
+ * Development tool only; the app never loads this file.
+ */
+const SHOWS: [prefix: string, episodes: string[]][] = [
+  ['The Office (U.S.): Season 2', ['The Dundies', 'Sexual Harassment', 'Office Olympics', 'The Fire', 'Halloween', 'The Fight', 'The Client', 'Christmas Party', 'Booze Cruise', 'The Injury', 'Casino Night']],
+  ['The Office (U.S.): Season 4', ['Fun Run: Part 1', 'Dunder Mifflin Infinity: Part 1', 'Local Ad', 'Dinner Party', 'Goodbye, Toby: Part 2']],
+  ['Stranger Things: Stranger Things 2', ['Chapter One: MADMAX', 'Chapter Two: Trick or Treat, Freak', 'Chapter Three: The Pollywog']],
+  ['Stranger Things: Stranger Things 3', ['Chapter One: Suzie, Do You Copy?', 'Chapter Eight: The Battle of Starcourt']],
+  ['Stranger Things', ['Chapter One: The Vanishing of Will Byers', 'Chapter Two: The Weirdo on Maple Street']],
+  ['Breaking Bad: Season 1', ['Pilot', "Cat's in the Bag...", "...And the Bag's in the River"]],
+  ['Breaking Bad: Season 5', ['Ozymandias', 'Granite State', 'Felina']],
+  ['Better Call Saul: Season 3', ['Mabel', 'Witness', 'Chicanery']],
+  ['The Crown: Season 1', ['Wolferton Splash', 'Hyde Park Corner']],
+  ['The Crown: Season 4', ['Gold Stick', 'The Balmoral Test', 'Fairytale']],
+  ["The Queen's Gambit: Limited Series", ['Openings', 'Exchanges', 'Doubled Pawns', 'Middle Game', 'Fork', 'Adjournment', 'End Game']],
+  ['Money Heist: Part 1', ['Episode 1', 'Episode 2', 'Episode 3']],
+  ['Money Heist: Part 5', ['The End of the Road', 'A Family Tradition']],
+  ['The Great British Baking Show: Collection 5', ['Cake Week', 'Biscuit Week', 'Bread Week', 'Pastry Week', 'The Final']],
+  ['The Great British Baking Show: Collection 9', ['Cake Week', 'Chocolate Week']],
+  ["Chef's Table: Volume 1", ['Massimo Bottura', 'Dan Barber']],
+  ['Black Mirror: Season 3', ['Nosedive', 'San Junipero', 'Hated in the Nation']],
+  ['Black Mirror: Season 4', ['USS Callister', 'Hang the DJ']],
+  ['Friends: Season 5', ['The One with All the Thanksgivings', 'The One Where Everybody Finds Out', 'The One with the Cop']],
+  ['Friends: Season 8', ['The One with the Rumor', "The One with Monica's Boots"]],
+  ['Gilmore Girls: Season 1', ['Pilot', "The Lorelais' First Day at Chilton", 'Kill Me Now', "Rory's Birthday Parties"]],
+  ['Gilmore Girls: A Year in the Life: Season 1', ['Winter', 'Spring']],
+  ["Grey's Anatomy: Season 2", ['Raindrops Keep Falling on My Head', "It's the End of the World", 'As We Know It', 'Losing My Religion']],
+  ["Grey's Anatomy: Season 6", ['Good Mourning', 'Sanctuary', 'Death and All His Friends']],
+  ['Bridgerton: Season 1', ['Diamond of the First Water', 'Shock and Delight', 'Art of the Swoon']],
+  ['Bridgerton: Season 2', ['Capital R Rake', 'Off to the Races']],
+  ['Squid Game: Season 1', ['Red Light, Green Light', 'Hell', 'The Man with the Umbrella', 'Gganbu', 'One Lucky Day']],
+  ['Love Is Blind: Season 1', ['Is Love Blind?', 'Will You Marry Me?', 'First Night Together']],
+  ['Love Is Blind: Season 4', ['Love Is Blind, Take 4', 'Playing with Fire']],
+  ['The Circle: Season 1', ['Hello, Circle', 'Flirt or Fake?']],
+  ['Selling Sunset: Season 3', ['Billion Dollar Baby', 'The More the Merrier']],
+  ['Too Hot to Handle: Season 1', ['Love, Sex or Money', 'Two Is Company, Three Is a Crowd']],
+  ['Queer Eye: Season 1', ["You Can't Fix Ugly", 'Saving Sasquatch']],
+  ['Emily in Paris: Season 1', ['Emily in Paris', 'Masculin Féminin', 'Sexy or Sexist']],
+  ['Never Have I Ever: Season 1', ['Pilot', '... had sex with Paxton Hall-Yoshida']],
+  ['The Good Place: Season 1', ['Everything Is Fine', 'Flying', 'Tahani Al-Jamil', "Michael's Gambit"]],
+  ['Parks and Recreation: Season 3', ['Go Big or Go Home', 'Flu Season', 'Harvest Festival', "Li'l Sebastian"]],
+  ['Brooklyn Nine-Nine: Season 1', ['Pilot', 'The Tagger', 'Halloween']],
+  ['Community: Season 2', ['Anthropology 101', 'Epidemiology', 'Advanced Dungeons & Dragons', 'A Fistful of Paintballs']],
+  ['New Girl: Season 1', ['Pilot', 'Kryptonite', 'Wedding']],
+  ["Schitt's Creek: Season 5", ['The Crowening', 'Love Letters', 'Life Is a Cabaret']],
+  ['Derry Girls: Season 1', ['Episode 1', 'Episode 2']],
+  ['The Witcher: Season 1', ["The End's Beginning", 'Four Marks']],
+  ['Ozark: Season 1', ['Sugarwood', 'Blue Cat', 'My Dripping Sleep']],
+  ['Ozark: Season 4', ['The Beginning of the End', 'A Hard Way to Go']],
+  ['Narcos: Season 1', ['Descenso', 'The Sword of Simón Bolívar']],
+  ['Narcos: Mexico: Season 1', ['Camelot', 'The Plaza System']],
+  ['Dark: Season 1', ['Secrets', 'Lies', 'Past and Present']],
+  ['Wednesday: Season 1', ["Wednesday's Child Is Full of Woe", 'Woe Is the Loneliest Number']],
+  ['You: Season 1', ['Pilot', 'The Last Nice Guy in New York']],
+  ['Outer Banks: Season 1', ['Pilot', 'The Lucky Compass']],
+  ['Ginny & Georgia: Season 1', ['Pilot', "It's a Face Not a Mask"]],
+  ['Virgin River: Season 1', ['Carry On', 'Lost']],
+  ['Sex Education: Season 1', ['Episode 1', 'Episode 2', 'Episode 3']],
+  ['The Umbrella Academy: Season 1', ['We Only See Each Other at Weddings and Funerals', 'Run Boy Run']],
+  ["Marvel's Daredevil: Season 1", ['Into the Ring', 'Cut Man']],
+  ['Peaky Blinders: Season 1', ['Episode 1', 'Episode 2']],
+  ['BoJack Horseman: Season 3', ['Start Spreading the News', 'Fish Out of Water']],
+  ['Big Mouth: Season 1', ['Ejaculation', 'Everybody Bleeds']],
+  ['Disenchantment: Part 1', ['A Princess, an Elf, and a Demon Walk Into a Bar', 'For Whom the Pig Oinks']],
+  ['Arrested Development: Season 1', ['Pilot', 'Top Banana', 'Bringing Up Buster']],
+  ['Seinfeld: Season 4', ['The Contest', 'The Bubble Boy', 'The Junior Mint']],
+  ['Suits: Season 1', ['Pilot', 'Errors and Omissions']],
+  ['Shameless (U.S.): Season 1', ['Pilot', 'Frank the Plank']],
+  ['House of Cards: Season 1', ['Chapter 1', 'Chapter 2']],
+  ['Orange Is the New Black: Season 1', ["I Wasn't Ready", 'Tit Punch']],
+  ['Beef: Season 1', ['The Birds Don’t Sing, They Screech in Pain', 'The Rapture of Being Alive']],
+  ['The Diplomat: Season 1', ['The Cinderella Thing', "Don't Call It a Kidnapping"]],
+  ['The Night Agent: Season 1', ['The Call', 'Redial']],
+  ['Lupin: Part 1', ['Chapter 1', 'Chapter 2']],
+  ['The Haunting of Hill House: Limited Series', ['Steven Sees a Ghost', 'Open Casket']],
+  ['Making a Murderer: Part 1', ['Eighteen Years Lost', 'Turning the Tables']],
+  ['Tiger King: Limited Series', ['Not Your Average Joe', 'Cult of Personality']],
+  ['Our Planet: Season 1', ['One Planet', 'Frozen Worlds']],
+  ['Formula 1: Drive to Survive: Season 1', ['All to Play For', 'The King of Spain']],
+  ['The Last Dance: Limited Series', ['Episode I', 'Episode II']],
+  ['Avatar: The Last Airbender: Book 1', ['The Boy in the Iceberg', 'The Avatar Returns']],
+  ['Cobra Kai: Season 1', ['Ace Degenerate', 'Strike First']],
+  ['Zzyzx Road Trip Diaries: Limited Series', ['Part 1', 'Part 2']],
+];
+
+const FILMS = [
+  'Glass Onion: A Knives Out Mystery',
+  'Knives Out',
+  'The Irishman',
+  'Marriage Story',
+  'Roma',
+  'Bird Box',
+  "Don't Look Up",
+  'The Gray Man',
+  'Red Notice',
+  'Extraction',
+  'Enola Holmes',
+  'The Kissing Booth',
+  "To All the Boys I've Loved Before",
+  'Always Be My Maybe',
+  'Set It Up',
+  'Murder Mystery',
+  'The Adam Project',
+  'Hustle',
+  'Leave the World Behind',
+  'The Social Dilemma',
+  'Parasite',
+  'Paddington 2',
+  'Superbad',
+  'Spider-Man: Into the Spider-Verse',
+  'Mission: Impossible - Fallout',
+  'Star Wars: Episode IV: A New Hope',
+  'Black Mirror: Bandersnatch',
+  'El Camino: A Breaking Bad Movie',
+  'Dave Chappelle: Sticks & Stones',
+  'John Mulaney: Kid Gorgeous at Radio City',
+  'Bo Burnham: Inside',
+  'Taylor Tomlinson: Quarter-Life Crisis',
+  'Hannah Gadsby: Nanette',
+  'The Mitchells vs. the Machines',
+  'Klaus',
+  'Okja',
+  'The Two Popes',
+  'Da 5 Bloods',
+  'All Quiet on the Western Front',
+  'Pride & Prejudice',
+  'The Notebook',
+  'Crazy Rich Asians',
+  'Inception',
+  'Forrest Gump',
+  'Completely Unknown Home Movie',
+];
+
+/** The file text, newest first, with Netflix's M/D/YY dates. */
+export function sampleNetflixHistory(): string {
+  const lines: string[] = [];
+  SHOWS.forEach(([prefix, episodes]) => episodes.forEach((e) => lines.push(`${prefix}: ${e}`)));
+  FILMS.forEach((f) => lines.push(f));
+  let day = 0;
+  const out = ['Title,Date'];
+  // Interleave deterministically so dates are spread over about two years.
+  lines.forEach((title, k) => {
+    day = (k * 37) % 700;
+    const d = new Date(Date.UTC(2026, 9, 1) - day * 86_400_000);
+    out.push(`"${title.replace(/"/g, '""')}",${d.getUTCMonth() + 1}/${d.getUTCDate()}/${String(d.getUTCFullYear()).slice(2)}`);
+  });
+  return out.join('\n') + '\n';
+}

@@ -3,6 +3,8 @@ import { APP_NAME } from '../config';
 import { SERVICES, type PersonId, type Profile } from '../contracts';
 import { Header, Segmented, Sheet } from './components';
 import { useApp } from './context';
+import { ImportSection } from './Import';
+import { formatCount } from './helpers';
 
 type UsTab = 'HG' | 'BG' | 'settings';
 
@@ -41,7 +43,7 @@ function ProfilePage({ person }: { person: PersonId }) {
   const { services, state, titleOf, startOnboarding, toast } = useApp();
   const { engine, catalog, sync } = services;
   const profile = state.profiles[person];
-  const [showAllSeen, setShowAllSeen] = useState(false);
+  const [seenShown, setSeenShown] = useState(8);
 
   const insights = useMemo(() => engine.describeTaste(profile, catalog), [engine, profile, catalog]);
 
@@ -55,7 +57,7 @@ function ProfilePage({ person }: { person: PersonId }) {
   };
 
   const seenIds = Object.entries(state.seen[person] ?? {})
-    .sort((a, b) => b[1] - a[1])
+    .sort((a, b) => b[1].at - a[1].at)
     .map(([id]) => id);
   const neverIds = Object.entries(state.never[person] ?? {})
     .sort((a, b) => b[1] - a[1])
@@ -144,27 +146,31 @@ function ProfilePage({ person }: { person: PersonId }) {
 
       <section className="block">
         <h2>Seen</h2>
-        <p className="muted small">Titles marked as seen (favourites count too).</p>
+        <p className="muted small">
+          Titles marked as watched ({formatCount(seenIds.length)}); favourites count too. The full list, with search, is on the History tab.
+        </p>
         <ul className="plain-list" data-testid="seen-list">
           {seenIds.length === 0 && <li className="muted">Nothing marked yet.</li>}
-          {(showAllSeen ? seenIds : seenIds.slice(0, 8)).map((id) => (
+          {seenIds.slice(0, seenShown).map((id) => (
             <li key={id} data-testid="seen-row" data-item-id={id}>
               <span>{titleOf(id)}</span>
-              <button type="button" className="mini-pill" data-testid="unmark-seen" onClick={() => sync.setSeen(person, [id], false)}>
+              <button type="button" className="mini-pill" data-testid="unmark-seen" onClick={() => sync.unmarkWatched(person, [id]).catch(() => toast('Could not save that. Please try again.'))}>
                 Not seen
               </button>
             </li>
           ))}
         </ul>
-        {seenIds.length > 8 && !showAllSeen && (
-          <button type="button" className="btn-link" data-testid="seen-show-all" onClick={() => setShowAllSeen(true)}>
-            Show all {seenIds.length}
+        {seenIds.length > seenShown && (
+          <button type="button" className="btn-link" data-testid="seen-show-all" onClick={() => setSeenShown((n) => n + 50)}>
+            {seenShown <= 8 ? `Show ${Math.min(50, seenIds.length - seenShown)} more` : `Show more (${formatCount(seenIds.length - seenShown)} left)`}
           </button>
         )}
         <button type="button" className="btn btn-ghost btn-block" data-testid="profile-redo-onboarding" onClick={() => startOnboarding(person)}>
           Tick what {person} has seen
         </button>
       </section>
+
+      <ImportSection person={person} />
 
       <section className="block">
         <h2>Never</h2>

@@ -9,15 +9,17 @@ import {
   writeLocal,
   type AppCtxValue,
   type PerformArgs,
-  type PickInfo,
   type SoloFlow,
   type Tab,
+  type ToastAction,
 } from './context';
 import { inSession, needsToJoin, nextUnshownMatch, snapshotOf, todayLocal } from './helpers';
-import { History, Watchlist } from './Lists';
+import { History } from './History';
+import { Watchlist } from './Lists';
+import { Matches } from './Matches';
 import { NewFeed } from './NewFeed';
 import { Onboarding } from './Onboarding';
-import { JoinCard, MatchScreen, PickScreen } from './Overlays';
+import { JoinCard, MatchScreen } from './Overlays';
 import { Setup, Splash } from './Setup';
 import { Tonight } from './Tonight';
 import { Us } from './Us';
@@ -34,10 +36,12 @@ const TABS: { id: Tab; label: string; icon: ReactNode }[] = [
   { id: 'tonight', label: 'Tonight', icon: Icon.tonight },
   { id: 'new', label: 'New', icon: Icon.fresh },
   { id: 'watchlist', label: 'Watchlist', icon: Icon.list },
+  { id: 'matches', label: 'Matches', icon: Icon.heart },
   { id: 'history', label: 'History', icon: Icon.history },
   { id: 'us', label: 'Us', icon: Icon.us },
 ];
 
+const SHOWN_KEY = 'wtw.ui.followups.shown.v1';
 const matchKey = (sessionId: string) => `wtw.ui.matchShown.${sessionId}`;
 
 function debugEnabled(): boolean {
@@ -60,12 +64,12 @@ export function App({ services }: AppProps) {
   const [tab, setTab] = useState<Tab>('tonight');
   const [solo, setSolo] = useState<SoloFlow | null>(null);
   const [sessionLeft, setSessionLeft] = useState(false);
-  const [pick, setPick] = useState<PickInfo | null>(null);
   const [onboardFor, setOnboardFor] = useState<PersonId | null>(null);
   const [onboardDismissed, setOnboardDismissed] = useState(false);
   const [matchIdx, setMatchIdx] = useState<number | null>(null);
   const [joinDismissed, setJoinDismissed] = useState<string | null>(null);
-  const [toastMsg, setToastMsg] = useState<{ id: number; text: string } | null>(null);
+  const [toastMsg, setToastMsg] = useState<{ id: number; text: string; action?: ToastAction } | null>(null);
+  const [shownKeys, setShownKeys] = useState<string[]>(() => readLocal<string[]>(SHOWN_KEY, []));
 
   // Dev / QA hook.
   useEffect(() => {
@@ -77,10 +81,10 @@ export function App({ services }: AppProps) {
   const itemById = useCallback((id: string): CatalogItem | undefined => items.get(id), [items]);
   const titleOf = useCallback((id: string) => items.get(id)?.title ?? refs.get(id)?.title ?? id, [items, refs]);
 
-  const toast = useCallback((text: string) => {
+  const toast = useCallback((text: string, action?: ToastAction) => {
     const id = Date.now();
-    setToastMsg({ id, text });
-    window.setTimeout(() => setToastMsg((t) => (t && t.id === id ? null : t)), 3200);
+    setToastMsg({ id, text, action });
+    window.setTimeout(() => setToastMsg((t) => (t && t.id === id ? null : t)), action ? 6500 : 3200);
   }, []);
 
   const me: PersonId | null = device.person;
@@ -90,7 +94,6 @@ export function App({ services }: AppProps) {
   useEffect(() => {
     if (device.status !== 'paired') {
       setSolo(null);
-      setPick(null);
       setMatchIdx(null);
       setOnboardFor(null);
       setOnboardDismissed(false);
@@ -139,16 +142,14 @@ export function App({ services }: AppProps) {
         if (sessionId) await sync.swipeInSession(sessionId, meNow, item.id, action === 'yes', snapshot);
         switch (action) {
           case 'yes':
-            if (!sessionId) {
-              await sync.addHistory({ kind: 'solo', who, itemId: item.id, snapshot, pick: a.pick, service: a.service });
-              setPick({ item, pick: a.pick, service: a.service, who });
-            }
+            // Solo yes: onto the Matches tab. No screen change; the deck carries on.
+            if (!sessionId) await sync.addPick({ kind: 'solo', who, itemId: item.id, snapshot, pick: a.pick, service: a.service });
             break;
           case 'not-tonight':
             for (const p of actors) await sync.setNotTonight(p, item.id, todayLocal());
             break;
           case 'seen':
-            for (const p of actors) await sync.setSeen(p, [item.id], true);
+            for (const p of actors) await sync.markWatched(p, [{ itemId: item.id, source: 'manual', snapshot }]);
             break;
           case 'save':
             await sync.addToWatchlist(a.list ?? (who === 'Together' ? 'ours' : who), item.id, meNow, snapshot);
@@ -171,6 +172,32 @@ export function App({ services }: AppProps) {
 
   const goTab = useCallback((t: Tab) => setTab(t), []);
 
+  const followUpsShown = useCallback((keys: string[]) => {
+    setShownKeys((prev) => {
+      const next = [...new Set([...prev, ...keys])].slice(-400);
+      if (next.length === prev.length && next.every((k, i) => k === prev[i])) return prev;
+      writeLocal(SHOWN_KEY, next);
+      return next;
+    });
+  }, []);
+
+  // The dot on the New tab: follow-ups for me or Together that this phone has not displayed yet.
+  const followUpKeys = useMemo(() => {
+    if (!state || !me || device.status !== 'paired') return [] as string[];
+    try {
+      const ctx = engineCtx();
+      return [...engine.followUps(me, ctx), ...engine.followUps('Together', ctx)].map((f) => f.key);
+    } catch {
+      return [] as string[];
+    }
+    // Recomputed only when the shared data (or who/engine) changes, not on unrelated re-renders.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state, me, device.status, engine]);
+  const newDot = useMemo(() => {
+    const seenKeys = new Set(shownKeys);
+    return followUpKeys.some((k) => !seenKeys.has(k));
+  }, [followUpKeys, shownKeys]);
+
   // ---- not ready yet ------------------------------------------------------
   if (device.status === 'loading') return <Shell><Splash message={'Starting up…'} /></Shell>;
   if (device.status === 'unpaired' || !me) {
@@ -192,7 +219,7 @@ export function App({ services }: AppProps) {
     titleOf,
     perform,
     toast,
-    showPick: setPick,
+    followUpsShown,
     startOnboarding: setOnboardFor,
     goTab,
     solo,
@@ -230,6 +257,7 @@ export function App({ services }: AppProps) {
               {tab === 'tonight' && <Tonight />}
               {tab === 'new' && <NewFeed />}
               {tab === 'watchlist' && <Watchlist />}
+              {tab === 'matches' && <Matches />}
               {tab === 'history' && <History />}
               {tab === 'us' && <Us />}
             </main>
@@ -243,7 +271,10 @@ export function App({ services }: AppProps) {
                   data-testid={`tab-${t.id}`}
                   onClick={() => setTab(t.id)}
                 >
-                  {t.icon}
+                  <span className="tab-icon">
+                    {t.icon}
+                    {t.id === 'new' && newDot && <i className="tab-dot" data-testid="new-dot" aria-label="New follow-ups" />}
+                  </span>
                   <span>{t.label}</span>
                 </button>
               ))}
@@ -252,18 +283,6 @@ export function App({ services }: AppProps) {
         )}
 
         {showJoinBanner && session && <JoinCard session={session} onDismiss={() => setJoinDismissed(session.id)} />}
-
-        {pick && !matchShown && (
-          <PickScreen
-            info={pick}
-            onKeep={() => setPick(null)}
-            onDone={() => {
-              setPick(null);
-              setSolo(null);
-              setTab('tonight');
-            }}
-          />
-        )}
 
         {matchShown && session && (
           <MatchScreen
@@ -291,7 +310,21 @@ export function App({ services }: AppProps) {
         )}
         {toastMsg && (
           <div className="toast" role="status" data-testid="toast">
-            {toastMsg.text}
+            <span data-testid="toast-text">{toastMsg.text}</span>
+            {toastMsg.action && (
+              <button
+                type="button"
+                className="toast-action"
+                data-testid="toast-action"
+                onClick={() => {
+                  const act = toastMsg.action;
+                  setToastMsg(null);
+                  act?.onClick();
+                }}
+              >
+                {toastMsg.action.label}
+              </button>
+            )}
           </div>
         )}
       </Shell>

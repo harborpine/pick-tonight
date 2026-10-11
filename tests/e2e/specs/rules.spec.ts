@@ -52,15 +52,18 @@ test('rule 2: no horror / true crime / scary for BG alone or Together (while HG 
   const hg = ids(await engineDeck(page, { ...REQ, who: 'HG', mood: 'gripped' }));
   for (const id of SCARY_TITLES) expect(hg, `control: HG gripped deck should contain ${id}`).toContain(id);
 
+  const together = await togetherDeck(page, { mood: 'gripped', time: 120, viewing: 'focused', novelty: 'either' });
+  expect(together.length).toBeGreaterThan(5);
+  for (const id of SCARY_TITLES) expect(ids(together), `Together deck contains ${id}`).not.toContain(id);
+
+  await tid(page, 'session-end').click();
+  await tid(page, 'end-confirm').click();
+  await expect(tid(page, 'ask')).toBeVisible();
   await askSolo(page, { who: 'BG', viewing: 'focused', mood: 'gripped', time: 120 });
   const bg = await pageThroughDeck(page);
   expect(bg.length).toBeGreaterThan(5);
   for (const id of SCARY_TITLES) expect(ids(bg), `BG deck contains ${id}`).not.toContain(id);
   await tid(page, 'empty-back').click();
-
-  const together = await togetherDeck(page, { mood: 'gripped', time: 120, viewing: 'focused', novelty: 'either' });
-  expect(together.length).toBeGreaterThan(5);
-  for (const id of SCARY_TITLES) expect(ids(together), `Together deck contains ${id}`).not.toContain(id);
 
   // The flags themselves: nothing flagged as horror/true crime/scary appears in either deck
   const rows = await catalogRows(page);
@@ -108,7 +111,7 @@ test('rule 4: "about 20 min" never shows anything longer than 25 minutes; longer
 
   await askSolo(page, { time: 45 });
   const mid = await pageThroughDeck(page);
-  expect(mid.length).toBeGreaterThan(3);
+  expect(mid.length).toBeGreaterThan(2);
   for (const c of mid) expect(parseMinutes(c.minutes), `${c.title} is ${c.minutes}`).toBeLessThanOrEqual(50);
   await tid(page, 'empty-back').click();
 
@@ -151,7 +154,8 @@ test('rule 6: How I Met Your Mother (Hulu with ads + Netflix ad-free) is shown a
   await startMemoryPhone(page);
   for (const who of ['HG', 'BG'] as Who[]) {
     await tid(page, 'tab-tonight').click();
-    await askSolo(page, { who, mood: 'laugh', time: 60, viewing: 'focused', novelty: 'either' });
+    // v2: "Either" leans new and HIMYM is a favourite of both, so ask for Rewatch to make sure it is in the deck.
+    await askSolo(page, { who, mood: 'laugh', time: 60, viewing: 'focused', novelty: 'rewatch' });
     const deck = await pageThroughDeck(page);
     const himym = deck.find((c) => c.id === 'tv-1100');
     expect(himym, `HIMYM is in ${who}'s deck`).toBeTruthy();

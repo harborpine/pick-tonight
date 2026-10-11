@@ -14,6 +14,7 @@
  *  7. Never: hidden for the person who tapped it and for Together; hidden
  *     everywhere once both have tapped it.
  *  +  "Not tonight" hides a title for that person (and Together) on that date only.
+ *  +  Picked: a title sitting on the Matches tab is left out for the people it was picked for.
  */
 import {
   MOODS,
@@ -115,11 +116,63 @@ export function availableMoods(who: Who, ctx: EngineContext): MoodId[] {
 // Rule 5 (seen), Rule 7 (never), and "not tonight"
 // ---------------------------------------------------------------------------
 
-/** Favourites count as seen. */
+/** Favourites count as seen. Presence in the watched list is what counts; the entry's contents don't matter here. */
 export function hasSeen(person: PersonId, itemId: string, ctx: EngineContext): boolean {
   const seen = ctx.state.seen?.[person];
   if (seen && Object.prototype.hasOwnProperty.call(seen, itemId)) return true;
   return ctx.state.profiles?.[person]?.favorites?.includes(itemId) ?? false;
+}
+
+/** Timestamps before this (1 Jan 2000) are placeholders, not real dates. */
+const REAL_DATE_FROM = 946684800000;
+
+/**
+ * When the person last watched the title (ms), or null when it is not on their
+ * watched list or the entry carries no real date. Tolerates the pre-v2 shape,
+ * where the stored value was the bare timestamp.
+ */
+export function watchedAt(person: PersonId, itemId: string, ctx: EngineContext): number | null {
+  const seen = ctx.state.seen?.[person];
+  if (!seen || !Object.prototype.hasOwnProperty.call(seen, itemId)) return null;
+  const entry = seen[itemId] as unknown;
+  const at = typeof entry === 'number' ? entry : (entry as { at?: unknown } | null)?.at;
+  return typeof at === 'number' && Number.isFinite(at) && at >= REAL_DATE_FROM ? at : null;
+}
+
+// ---------------------------------------------------------------------------
+// Picked (the Matches tab)
+// ---------------------------------------------------------------------------
+
+/**
+ * Item ids that are sitting on the Matches tab for this audience: a pick whose
+ * own audience shares at least one person with `who`. So HG's solo pick hides
+ * the title from HG and from Together (he is in both) but not from BG alone,
+ * and a Together match hides it from everyone.
+ *
+ * A pick stops counting once someone it was picked for has marked the title
+ * watched at or after the moment it was picked: it has been watched, so it is
+ * an ordinary seen title again (the contract's "until the pick is removed or
+ * the title is marked watched").
+ */
+export function pickedIds(who: Who, ctx: EngineContext): Set<string> {
+  const out = new Set<string>();
+  const picks = ctx.state.picks;
+  if (!Array.isArray(picks) || !picks.length) return out;
+  const audience = watchers(who);
+  for (const pick of picks) {
+    if (!pick || typeof pick.itemId !== 'string') continue;
+    const forWhom = watchers(pick.who === 'HG' || pick.who === 'BG' ? pick.who : 'Together');
+    if (!forWhom.some((p) => audience.includes(p))) continue;
+    const pickedAt = typeof pick.at === 'number' ? pick.at : 0;
+    if (forWhom.some((p) => (watchedAt(p, pick.itemId, ctx) ?? -1) >= pickedAt)) continue; // watched since
+    out.add(pick.itemId);
+  }
+  return out;
+}
+
+export function isPicked(itemId: string, who: Who, ctx: EngineContext): boolean {
+  if (!ctx.state.picks?.length) return false;
+  return pickedIds(who, ctx).has(itemId);
 }
 
 function tappedNever(person: PersonId, itemId: string, ctx: EngineContext): boolean {
@@ -221,7 +274,7 @@ export function choosePick(item: CatalogItem, req: SuggestRequest, ctx: EngineCo
 export const attentionOk = (item: CatalogItem, req: SuggestRequest): boolean =>
   req.viewing === 'focused' || item.attention === 'low';
 
-/** Rule 5. */
+/** Rule 5. ('either' is not a gate: it only shapes the mix, see rank.ts.) */
 export function noveltyOk(itemId: string, req: SuggestRequest, ctx: EngineContext): boolean {
   if (req.novelty === 'either') return true;
   const seen = seenByAny(itemId, req.who, ctx);
@@ -236,5 +289,6 @@ export function isEligible(item: CatalogItem, req: SuggestRequest, ctx: EngineCo
   if (!noveltyOk(item.id, req, ctx)) return false; // rule 5
   if (isNeverHidden(item.id, req.who, ctx)) return false; // rule 7
   if (isNotTonight(item.id, req.who, ctx)) return false;
+  if (isPicked(item.id, req.who, ctx)) return false; // already on the Matches tab
   return choosePick(item, req, ctx) !== null; // rule 4
 }
