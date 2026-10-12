@@ -40,10 +40,11 @@ jobs:
         env:
           TMDB_TOKEN: ${{ secrets.TMDB_TOKEN }}
         run: |
-          jq -rs '[ .[0].results[], .[1].results[] ] | map({id: .provider_id, name: .provider_name, p: (.display_priorities.US // .display_priority // 999)}) | unique_by(.id) | sort_by(.p) | .[0:150][] | "\(.id)\t\(.name)"' movie.json tv.json > top.tsv 2>/dev/null || true
+          for id in 43 73 520 387 2100 613 2545 1956 1957 1964 464 538 2285 332 83 350 1899 1796 2303 2616 386 11 99 87 151 258 526 34 283 207 300 191 212 430 190 278 1718 1768 2129 260; do echo "$id" >> top.tsv; done
           echo "== subscription + free-with-ads titles per provider (US): movies / tv =="
           while IFS=$'\t' read -r id name; do
             [ -z "$id" ] && continue
+            name=$(jq -r --argjson i $id '[.results[]|select(.provider_id==$i)][0].provider_name' movie.json tv.json | head -1)
             m=$(curl -sS -H "Authorization: Bearer $TMDB_TOKEN" "https://api.themoviedb.org/3/discover/movie?watch_region=US&with_watch_providers=$id&with_watch_monetization_types=flatrate%7Cads&vote_count.gte=30" | jq -r '.total_results // "err"')
             t=$(curl -sS -H "Authorization: Bearer $TMDB_TOKEN" "https://api.themoviedb.org/3/discover/tv?watch_region=US&with_watch_providers=$id&with_watch_monetization_types=flatrate%7Cads&vote_count.gte=30" | jq -r '.total_results // "err"')
             printf '%s\t%s\tmovies=%s\ttv=%s\n' "$id" "$name" "$m" "$t"
