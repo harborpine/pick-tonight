@@ -90,7 +90,7 @@ function ProfilePage({ memberId }: { memberId: MemberId }) {
               <div className="insight-text">
                 <span data-testid="insight-text">{i.text}</span>
                 <small>
-                  {i.source === 'favorites' ? 'From favourites' : i.source === 'learned' ? 'Learned from swipes' : 'You set this'}
+                  {i.source === 'favorites' ? (profile.favorites.length ? 'From favourites' : 'Starting point') : i.source === 'learned' ? 'Learned from swipes' : 'You set this'}
                   {i.correction ? ` • pinned: ${i.correction}` : ''}
                 </small>
               </div>

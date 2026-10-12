@@ -1,33 +1,34 @@
 import { test as base } from '@playwright/test';
-import { makePairedPhones, type Pair } from './app';
+import { firebaseSignInAvailable, makeGroup, type Group } from './app';
+
+let signIn: Promise<boolean> | null = null;
 
 /**
- * `pair` = two freshly paired phones on the real Firebase project (HG = A, BG = B).
- * On failure, screenshots of both phones are attached BEFORE the household is cleaned up.
+ * `group(names)` = real Firebase phones (one browser context each). The first creates the household, the rest join by invite link.
+ * On failure, a screenshot of every phone is attached BEFORE the household is deleted at the end of the test.
  */
-export const test = base.extend<{ pair: Pair }>({
-  pair: async ({ browser }, use, testInfo) => {
-    const u = testInfo.project.use;
-    const pair = await makePairedPhones(browser, {
-      viewport: u.viewport,
-      userAgent: u.userAgent,
-      deviceScaleFactor: u.deviceScaleFactor,
-      isMobile: u.isMobile,
-      hasTouch: u.hasTouch,
-      serviceWorkers: 'block',
-      baseURL: u.baseURL ?? 'http://localhost:4173',
+export const test = base.extend<{ group: (names: string[]) => Promise<Group> }>({
+  group: async ({ browser }, use, testInfo) => {
+    const made: Group[] = [];
+    await use(async (names) => {
+      signIn ??= firebaseSignInAvailable();
+      if (!(await signIn)) throw new Error('Firebase anonymous sign-in is OFF for the project (ADMIN_ONLY_OPERATION): these tests cannot run until it is enabled in the console.');
+      const g = await makeGroup(browser, testInfo, names);
+      made.push(g);
+      return g;
     });
-    await use(pair);
     if (testInfo.status !== testInfo.expectedStatus) {
-      for (const [name, page] of [['HG-phone', pair.A], ['BG-phone', pair.B]] as const) {
-        try {
-          await testInfo.attach(`${name}.png`, { body: await page.screenshot({ timeout: 5000 }), contentType: 'image/png' });
-        } catch {
-          /* page may be gone */
+      for (const g of made) {
+        for (const [i, page] of g.pages.entries()) {
+          try {
+            await testInfo.attach(`phone-${i + 1}.png`, { body: await page.screenshot({ timeout: 5000 }), contentType: 'image/png' });
+          } catch {
+            /* page may be gone */
+          }
         }
       }
     }
-    await pair.cleanup();
+    for (const g of made) await g.cleanup();
   },
 });
 

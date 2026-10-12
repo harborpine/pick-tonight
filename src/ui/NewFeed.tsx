@@ -136,6 +136,10 @@ function NewFeedInner() {
   };
 
   const save = saveOptions(me, who, state.members);
+  const requestSave = (card: DeckCard, key: string) => {
+    if (save.options.length === 1) act(key, card.itemId, card, 'save', save.options[0].list);
+    else setSaveFor({ card, key });
+  };
   const neverText = 'It will be hidden for you from now on. You can undo this later in Us.';
 
   return (
@@ -167,7 +171,7 @@ function NewFeedInner() {
                       </>
                     }
                     onAct={(a) => act(`fu:${f.key}`, f.itemId, f, a)}
-                    onSave={() => setSaveFor({ card: f, key: `fu:${f.key}` })}
+                    onSave={() => requestSave(f, `fu:${f.key}`)}
                     onNever={() => setNeverFor({ card: f, key: `fu:${f.key}` })}
                   />
                 </li>
@@ -209,7 +213,7 @@ function NewFeedInner() {
                   }
                   note={c.reasons[0] ? <span className="row-reason">{c.reasons[0]}</span> : undefined}
                   onAct={(a) => act(`new:${keyOf(c)}`, c.itemId, c, a)}
-                  onSave={() => setSaveFor({ card: c, key: `new:${keyOf(c)}` })}
+                  onSave={() => requestSave(c, `new:${keyOf(c)}`)}
                   onNever={() => setNeverFor({ card: c, key: `new:${keyOf(c)}` })}
                 />
               </li>

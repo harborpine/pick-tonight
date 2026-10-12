@@ -225,9 +225,7 @@ export function App({ services }: AppProps) {
     if (!state || !me || device.status !== 'paired' || !catalog || !state.profiles[me]) return [] as string[];
     try {
       const ctx = engineCtx();
-      const keys = engine.followUps([me], ctx).map((f) => f.key);
-      if (members.length > 1) keys.push(...engine.followUps(normalizeWho(members.map((m) => m.id)), ctx).map((f) => f.key));
-      return keys;
+      return engine.followUps([me], ctx).map((f) => f.key);
     } catch {
       return [] as string[];
     }

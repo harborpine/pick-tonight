@@ -2309,3 +2309,50 @@ textarea {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* Layout nits (qa) */
+.segmented.scrolly {
+  flex-wrap: wrap;
+  overflow: visible;
+}
+.segmented.scrolly button {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 100%;
+}
+.ask-title {
+  white-space: nowrap;
+}
+.ask-head {
+  flex-wrap: wrap;
+  row-gap: 0;
+}
+.services-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.setup.scroll-center {
+  padding-top: calc(var(--safe-top) + 12px);
+  gap: 10px;
+}
+.setup.scroll-center .setup-hero {
+  margin-bottom: 0;
+}
+.setup.scroll-center .setup-hero .splash-logo {
+  font-size: 40px;
+}
+.setup.scroll-center .setup-q {
+  font-size: 21px;
+}
+.setup.scroll-center .install-steps {
+  gap: 8px;
+}
+.setup.scroll-center .install-steps li {
+  padding: 10px 12px;
+  font-size: 15px;
+}
+.setup.scroll-center .btn-link {
+  min-height: 40px;
+  margin-bottom: calc(var(--safe-bottom) + 8px);
+}

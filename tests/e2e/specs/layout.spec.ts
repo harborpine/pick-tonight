@@ -1,214 +1,216 @@
 import { expect, test, type Page } from '@playwright/test';
+import { FIXTURE_PLANS } from '../../../src/contracts/fixtures/catalog';
 import {
   MEM_URL,
-  askSolo,
+  SAMPLE,
+  act,
+  ask,
+  createHousehold,
   expectInViewport,
-  expectNoHorizontalScroll,
-  markWatched,
+  expectNothingClippedSideways,
+  openSettings,
   openTab,
-  saveCard,
-  startMemoryPhone,
+  pickServices,
+  quickHousehold,
+  shot,
+  startTogether,
   tid,
-  wtw,
 } from '../helpers/app';
 
-const shot = (page: Page, name: string) => page.screenshot({ path: `test-results/screens/${name}.png` });
-
-/** The tab bar is on screen and nothing important is hidden underneath it. */
-async function expectAboveTabbar(page: Page, locator: ReturnType<Page['getByTestId']>, name: string) {
-  const tab = (await tid(page, 'tabbar').boundingBox())!;
-  const box = (await locator.boundingBox())!;
-  expect(box, `${name} has a box`).toBeTruthy();
-  expect(box.y + box.height, `${name} is hidden under the tab bar`).toBeLessThanOrEqual(tab.y + 1);
+/**
+ * Layout at iPhone size. Every screen: no sideways scroll, nothing sticking out of the screen, primary buttons in view.
+ * Screenshots go to the git-ignored test-results/screens/ folder so they can be looked at.
+ */
+async function check(page: Page, name: string) {
+  await expectNothingClippedSideways(page, name);
+  await shot(page, name);
 }
 
-test('layout: every main screen fits an iPhone (no sideways scrolling, tab bar and buttons reachable)', async ({ page }) => {
-  // --- setup screen
+test('first-run screens: welcome, create-or-join, name, long services list, each wizard step, done', async ({ page }) => {
   await page.goto(MEM_URL);
+  await expect(tid(page, 'welcome')).toBeVisible();
+  await check(page, 'welcome');
+  await expectInViewport(page, tid(page, 'continue-in-browser'), 'continue in browser (no scrolling needed)');
+  await tid(page, 'continue-in-browser').click();
   await expect(tid(page, 'setup')).toBeVisible();
-  await expectNoHorizontalScroll(page);
-  await expectInViewport(page, tid(page, 'person-HG'), 'HG button');
-  await expectInViewport(page, tid(page, 'person-BG'), 'BG button');
-  await shot(page, '01-setup');
-  await tid(page, 'person-HG').click();
-  await expectInViewport(page, tid(page, 'start-household'), 'start button');
-  await shot(page, '02-setup-first-phone');
+  await check(page, 'setup-choose');
+  await expectInViewport(page, tid(page, 'start-household'), 'start household');
+  await expectInViewport(page, tid(page, 'have-code'), 'have code');
+  await tid(page, 'have-code').click();
+  await check(page, 'setup-code');
+  await expectInViewport(page, tid(page, 'code-submit'), 'continue (code)');
+  await tid(page, 'code-back').click();
   await tid(page, 'start-household').click();
+  await tid(page, 'name-input').fill('W'.repeat(20));
+  await check(page, 'setup-name');
+  await expectInViewport(page, tid(page, 'wizard-next'), 'Next on the name step');
+  await tid(page, 'wizard-next').click();
 
-  // --- onboarding grid
-  await expect(tid(page, 'onboarding')).toBeVisible();
-  await expectNoHorizontalScroll(page);
-  await expectInViewport(page, tid(page, 'onboard-done'), 'Done button');
-  await expectInViewport(page, tid(page, 'onboard-skip'), 'Skip button');
-  await shot(page, '03-onboarding');
-  await tid(page, 'onboard-skip').click();
+  // the long services list (30 services): scrolls inside the page, the footer button stays reachable
+  await expect(tid(page, 'setup-services')).toBeVisible();
+  await check(page, 'setup-services-empty');
+  await expectInViewport(page, tid(page, 'wizard-next'), 'Next on the services step');
+  await pickServices(page, [['netflix', 'standard'], ['hulu', 'ads'], ['peacock', 'premium-plus'], ['paramount', 'premium']]);
+  await tid(page, 'service-toggle-hulu').scrollIntoViewIfNeeded();
+  await check(page, 'setup-services-chosen');
+  await tid(page, 'service-toggle-roku').scrollIntoViewIfNeeded();
+  await check(page, 'setup-services-bottom');
+  await expectInViewport(page, tid(page, 'wizard-next'), 'Next after scrolling the services list');
+  await tid(page, 'wizard-next').click();
 
-  // --- ask screen
-  await expect(tid(page, 'ask')).toBeVisible();
-  await expect(tid(page, 'tabbar')).toBeVisible();
-  await expectInViewport(page, tid(page, 'tabbar'), 'tab bar');
-  await expectNoHorizontalScroll(page);
-  await shot(page, '04-ask-top');
-  await tid(page, 'ask-group-genre').scrollIntoViewIfNeeded();
-  await page.waitForTimeout(300);
-  {
-    // the last question must not be hidden behind the floating Show me button
-    const g = (await tid(page, 'ask-group-genre').boundingBox())!;
-    const b = (await tid(page, 'ask-submit').boundingBox())!;
-    expect(g.y + g.height, 'genre question is hidden behind the Show me button').toBeLessThanOrEqual(b.y + 1);
-  }
-  await expectAboveTabbar(page, tid(page, 'ask-submit'), 'Show me button');
-  await expectInViewport(page, tid(page, 'ask-submit'), 'Show me button');
-  await shot(page, '05-ask-bottom');
-  // every chip in the fixed rows keeps the page margin (nothing touches or runs past the screen edge)
-  for (const group of ['who', 'viewing', 'time', 'novelty']) {
-    for (const chip of await page.locator(`[data-testid="ask-group-${group}"] [data-selected]`).all()) {
-      const b = (await chip.boundingBox())!;
-      expect(b.x + b.width, `a chip in the "${group}" row touches the right screen edge`).toBeLessThanOrEqual(page.viewportSize()!.width - 8);
-    }
-  }
-  // every mood chip fits the width
-  for (const m of await page.locator('[data-testid^="ask-mood-"]').all()) {
-    const b = (await m.boundingBox())!;
-    expect(b.x).toBeGreaterThanOrEqual(0);
-    expect(b.x + b.width).toBeLessThanOrEqual(page.viewportSize()!.width + 1);
-  }
-
-  // --- solo deck
-  await tid(page, 'ask-submit').click();
-  await expect(tid(page, 'card')).toBeVisible();
-  await expectNoHorizontalScroll(page);
-  await expectInViewport(page, tid(page, 'card'), 'card');
-  await expectInViewport(page, tid(page, 'card-title'), 'card title');
-  await expectInViewport(page, tid(page, 'card-service'), 'card service');
-  await expectInViewport(page, tid(page, 'card-pick'), 'card pick');
-  await expectInViewport(page, tid(page, 'tabbar'), 'tab bar');
-  for (const a of ['action-yes', 'action-not-tonight', 'action-seen', 'action-save', 'action-never']) {
-    await expectInViewport(page, tid(page, a), a);
-    await expectAboveTabbar(page, tid(page, a), a);
-    const b = (await tid(page, a).boundingBox())!;
-    expect(b.width, `${a} is a comfortable tap target`).toBeGreaterThanOrEqual(40);
-    expect(b.height, `${a} is a comfortable tap target`).toBeGreaterThanOrEqual(40);
-  }
-  // card is not covered by the action buttons
-  const card = (await tid(page, 'card').boundingBox())!;
-  const yes = (await tid(page, 'action-yes').boundingBox())!;
-  expect(card.y + card.height, 'card runs into the buttons').toBeLessThanOrEqual(yes.y + 2);
-  await shot(page, '06-card');
-  await tid(page, 'card-info').click();
-  await shot(page, '07-card-description');
-  await tid(page, 'card-overview').click();
-
-  // sheets
-  await tid(page, 'action-save').click();
-  await page.waitForTimeout(600); // sheet slides in
-  await expectInViewport(page, tid(page, 'save-sheet'), 'save sheet');
-  await shot(page, '08-save-sheet');
-  await tid(page, 'save-option-ours').click();
-  await tid(page, 'action-never').click();
-  await page.waitForTimeout(600);
-  await expectInViewport(page, tid(page, 'never-sheet'), 'never sheet');
-  await expectInViewport(page, tid(page, 'never-confirm'), 'never confirm');
-  await shot(page, '09-never-sheet');
-  await tid(page, 'never-cancel').click();
-
-  // --- a solo yes: no overlay, the deck carries on with a Liked chip that fits the screen
-  await tid(page, 'action-yes').click();
-  await expect(tid(page, 'pick-screen')).toHaveCount(0);
-  await expect(tid(page, 'liked-chip')).toBeVisible();
-  await expectNoHorizontalScroll(page);
-  await expectInViewport(page, tid(page, 'liked-chip'), 'Liked chip');
-  await expectInViewport(page, tid(page, 'card'), 'next card');
-  await shot(page, '10-after-yes');
-  await tid(page, 'deck-back').click();
-
-  // --- watchlist (with something in it), history, new, us
-  await askSolo(page, { who: 'HG', mood: 'cozy', time: 120 });
-  await saveCard(page, 'HG');
-  await openTab(page, 'watchlist');
-  await expect(tid(page, 'watchlist-row').first()).toBeVisible();
-  await expectNoHorizontalScroll(page);
-  await shot(page, '11-watchlist');
-  await openTab(page, 'matches');
-  await expect(tid(page, 'match-row').first()).toBeVisible();
-  await expectNoHorizontalScroll(page);
-  await shot(page, '11b-matches');
-  await markWatched(page, 'HG', ['tv-8592', 'tv-48891']);
-  await openTab(page, 'history');
-  await expect(tid(page, 'history-row').first()).toBeVisible();
-  await expectNoHorizontalScroll(page);
-  await shot(page, '12-history');
-  await openTab(page, 'new');
-  await expect(tid(page, 'new-row').first()).toBeVisible();
-  await expectNoHorizontalScroll(page);
-  await shot(page, '13-new');
-  await tid(page, 'new-row').first().scrollIntoViewIfNeeded();
-  await openTab(page, 'us');
-  await tid(page, 'us-seg-HG').click();
-  await expectNoHorizontalScroll(page);
-  await shot(page, '14-profile-hg');
-  await tid(page, 'us-seg-BG').click();
-  await expectNoHorizontalScroll(page);
-  await shot(page, '15-profile-bg');
-  await tid(page, 'us-seg-settings').click();
-  await expectNoHorizontalScroll(page);
-  await shot(page, '16-settings');
-  await tid(page, 'show-pairing-code').click();
-  await shot(page, '17-settings-code');
-  await tid(page, 'about').scrollIntoViewIfNeeded();
-  await shot(page, '18-settings-about');
-
-  // tab bar stays put on every tab
-  for (const t of ['tonight', 'new', 'watchlist', 'matches', 'history', 'us'] as const) {
-    await openTab(page, t);
-    await expectInViewport(page, tid(page, 'tabbar'), `tab bar on ${t}`);
-    await expectNoHorizontalScroll(page);
-  }
+  await expect(tid(page, 'wizard-favorites')).toBeVisible({ timeout: 30_000 });
+  await tid(page, 'fav-search').fill('office');
+  await expect(tid(page, 'fav-result').first()).toBeVisible();
+  await check(page, 'wizard-favorites');
+  await expectInViewport(page, tid(page, 'wizard-next'), 'Next on favourites');
+  await expectInViewport(page, tid(page, 'wizard-skip'), 'Skip on favourites');
+  await tid(page, 'wizard-skip').click();
+  await expect(tid(page, 'wizard-never')).toBeVisible();
+  await check(page, 'wizard-never');
+  await expectInViewport(page, tid(page, 'wizard-next'), 'Next on never');
+  await tid(page, 'wizard-skip').click();
+  await expect(tid(page, 'wizard-import')).toBeVisible();
+  await check(page, 'wizard-import');
+  await expectInViewport(page, tid(page, 'wizard-next'), 'Next on import');
+  await tid(page, 'wizard-skip').click();
+  await expect(tid(page, 'wizard-seen')).toBeVisible();
+  await expect(page.locator('[data-testid^="onboard-item-"]').first()).toBeVisible();
+  await check(page, 'wizard-seen');
+  await expectInViewport(page, tid(page, 'wizard-next'), 'Next on the seen grid');
+  await tid(page, 'wizard-skip').click();
+  await expect(tid(page, 'wizard-done')).toBeVisible();
+  await check(page, 'wizard-done');
+  await expectInViewport(page, tid(page, 'wizard-finish'), 'Start picking');
+  await expectInViewport(page, tid(page, 'solo-warning'), 'solo warning');
 });
 
-test('layout: Together deck and the match moment fit the screen (one phone, simulated partner)', async ({ page }) => {
-  await startMemoryPhone(page);
-  await tid(page, 'ask-who-Together').click();
+test('the main tabs for a household of four with 20-character names', async ({ page }) => {
+  const long = (c: string) => c.repeat(20);
+  const names = [long('M'), long('W'), long('i'), long('O')];
+  const h = await quickHousehold(page, names.map((name, i) => ({ name, like: (['alex', 'sam', 'kit', 'alex'] as const)[i] })));
+  await expect(tid(page, 'ask')).toBeVisible();
+  await expect(tid(page, 'who-everyone')).toBeVisible();
+  await check(page, 'ask-four-long-names');
+  for (const n of names) await expectInViewport(page, tid(page, `who-${h.ids[n]}`), `chip ${n.slice(0, 3)}`);
+  await tid(page, 'who-everyone').click();
+  await check(page, 'ask-four-everyone');
+  await tid(page, 'ask-submit').scrollIntoViewIfNeeded();
+  await expectInViewport(page, tid(page, 'ask-submit'), 'Start together');
   await tid(page, 'ask-submit').click();
   await expect(tid(page, 'session-deck')).toBeVisible();
-  await expectNoHorizontalScroll(page);
-  await expectInViewport(page, tid(page, 'session-status'), 'session status');
-  await expectInViewport(page, tid(page, 'card'), 'card');
-  await expectInViewport(page, tid(page, 'action-yes'), 'yes');
-  await shot(page, '20-together-waiting');
-  const sessionId = (await tid(page, 'session-deck').getAttribute('data-session-id'))!;
-  const itemId = (await tid(page, 'card').getAttribute('data-item-id'))!;
-  await wtw(
-    page,
-    async (w, a) => {
-      await w.sync.joinSession(a.sessionId, 'BG');
-      await w.sync.swipeInSession(a.sessionId, 'BG', a.itemId, true, { title: 'x', year: 2000, poster: null });
-    },
-    { sessionId, itemId },
-  );
-  await shot(page, '21-together-joined');
-  await tid(page, 'action-yes').click();
-  await expect(tid(page, 'match-screen')).toBeVisible();
-  await page.waitForTimeout(1200); // let the confetti settle in
-  await expectNoHorizontalScroll(page);
-  await expectInViewport(page, tid(page, 'match-keep'), 'Keep swiping');
-  await expectInViewport(page, tid(page, 'match-watching'), "We're watching this");
-  await expectInViewport(page, tid(page, 'match-title'), 'match title');
-  await shot(page, '22-match');
+  await check(page, 'session-waiting-four-long-names');
+  await expectInViewport(page, tid(page, 'action-yes'), 'Yes button');
+  for (const t of ['watchlist', 'matches', 'history', 'new', 'us']) {
+    await openTab(page, t as 'watchlist');
+    await expect(tid(page, t === 'us' ? 'us' : t === 'new' ? 'new-feed' : t)).toBeVisible();
+    await check(page, `tab-${t}-four-long-names`);
+  }
+  await expectInViewport(page, tid(page, 'tabbar'), 'tab bar');
+  // the segmented controls with four long names stay inside the screen (they may scroll inside themselves)
+  await openTab(page, 'history');
+  await check(page, 'history-four-long-names');
 });
 
-test('layout: the join prompt banner is on screen and does not hide the tab bar', async ({ page }) => {
-  await startMemoryPhone(page);
-  await wtw(page, async (w) => {
-    const req = { who: 'Together', viewing: 'focused', mood: 'laugh', time: 60, novelty: 'either', genre: null };
-    const deck = w.engine.buildDeck(req, { catalog: w.catalog, state: w.sync.getState(), today: '2026-01-01' }, { limit: 10 });
-    await w.sync.startSession('BG', req, deck);
-  });
-  await expect(tid(page, 'join-prompt')).toBeVisible();
-  await page.waitForTimeout(700); // banner slides in
-  await expectInViewport(page, tid(page, 'join-prompt'), 'join prompt');
-  await expectInViewport(page, tid(page, 'join-button'), 'join button');
-  await expectInViewport(page, tid(page, 'tabbar'), 'tab bar');
-  await expectNoHorizontalScroll(page);
-  await shot(page, '23-join-prompt');
+test('deck card, match moment, empty states and the sheets', async ({ page }) => {
+  const h = await quickHousehold(page, SAMPLE);
+  await openTab(page, 'tonight');
+  await check(page, 'ask-three');
+  await ask(page, { mood: 'laugh', time: 120 });
+  await check(page, 'solo-deck');
+  for (const a of ['action-yes', 'action-not-tonight', 'action-seen', 'action-save', 'action-never']) await expectInViewport(page, tid(page, a), a);
+  await tid(page, 'card-info').click();
+  await check(page, 'card-overview');
+  await tid(page, 'card-info').click();
+  await tid(page, 'action-save').click();
+  await check(page, 'save-sheet');
+  await expectInViewport(page, tid(page, 'save-option-ours'), 'Ours option');
+  await page.keyboard.press('Escape');
+  await tid(page, 'save-option-ours').click();
+  await tid(page, 'action-never').click();
+  await check(page, 'never-sheet');
+  await expectInViewport(page, tid(page, 'never-confirm'), 'never confirm');
+  await tid(page, 'never-cancel').click();
+  await act(page, 'yes');
+  await openTab(page, 'matches');
+  await check(page, 'matches');
+  await tid(page, 'match-row').first().click();
+  await check(page, 'match-detail');
+  await expectInViewport(page, tid(page, 'match-watched'), 'watched button');
+  await tid(page, 'match-close').click();
+  // a Together match screen
+  await openTab(page, 'tonight');
+  await tid(page, 'deck-back').click();
+  await startTogether(page, [h.ids.Alex, h.ids.Sam].sort(), { mood: 'laugh' });
+  await act(page, 'yes');
+  await page.waitForTimeout(700);
+  await h.actAs('Sam');
+  await check(page, 'join-prompt');
+  await tid(page, 'join-button').click();
+  await act(page, 'yes');
+  await expect(tid(page, 'match-screen')).toBeVisible();
+  await page.waitForTimeout(1200);
+  await check(page, 'match-screen');
+  await expectInViewport(page, tid(page, 'match-watching'), 'We are watching this');
+  await expectInViewport(page, tid(page, 'match-keep'), 'Keep swiping');
+});
+
+test('settings screens: invite sheet, remove sheet, unpair, delete confirmation, privacy, about', async ({ page }) => {
+  const h = await quickHousehold(page, SAMPLE);
+  await openSettings(page);
+  await check(page, 'settings');
+  await tid(page, 'invite-make').scrollIntoViewIfNeeded();
+  await tid(page, 'invite-make').click();
+  await expect(tid(page, 'invite-code')).toBeVisible();
+  await tid(page, 'invite-share').scrollIntoViewIfNeeded();
+  await check(page, 'settings-invite');
+  await expectInViewport(page, tid(page, 'invite-link'), 'invite link');
+  await expectInViewport(page, tid(page, 'invite-code'), 'invite code');
+  await tid(page, 'services-edit').scrollIntoViewIfNeeded();
+  await tid(page, 'services-edit').click();
+  await check(page, 'settings-services-edit');
+  await tid(page, 'services-done').scrollIntoViewIfNeeded();
+  await tid(page, 'services-done').click();
+  await tid(page, `remove-member-${h.ids.Kit}`).scrollIntoViewIfNeeded();
+  await tid(page, `remove-member-${h.ids.Kit}`).click();
+  await check(page, 'remove-sheet');
+  await expectInViewport(page, tid(page, 'remove-confirm'), 'remove confirm');
+  await tid(page, 'remove-cancel').click();
+  await tid(page, 'unpair').scrollIntoViewIfNeeded();
+  await tid(page, 'unpair').click();
+  await check(page, 'unpair-sheet');
+  await expectInViewport(page, tid(page, 'unpair-confirm'), 'unpair confirm');
+  await tid(page, 'unpair-cancel').click();
+  await tid(page, 'delete-everything').click();
+  await check(page, 'delete-sheet-explain');
+  await expectInViewport(page, tid(page, 'delete-continue'), 'delete continue');
+  await tid(page, 'delete-continue').click();
+  await tid(page, 'delete-input').fill('DELETE');
+  await check(page, 'delete-sheet-type');
+  await expectInViewport(page, tid(page, 'delete-confirm'), 'delete confirm');
+  await tid(page, 'delete-cancel').click();
+  await tid(page, 'open-privacy').scrollIntoViewIfNeeded();
+  await tid(page, 'open-privacy').click();
+  await check(page, 'privacy');
+  await tid(page, 'settings-back').click();
+  await tid(page, 'open-about').click();
+  await check(page, 'about');
+  await expectInViewport(page, tid(page, 'about-tmdb-logo'), 'TMDB logo');
+});
+
+test('solo-household screens and the solo unpair warning', async ({ page }) => {
+  await createHousehold(page, { name: 'Solo', services: Object.entries(FIXTURE_PLANS).map(([id, p]) => [id, p as string] as [string, string]) });
+  await check(page, 'ask-solo');
+  await openTab(page, 'us');
+  await check(page, 'us-solo');
+  await openSettings(page);
+  await tid(page, 'unpair').scrollIntoViewIfNeeded();
+  await tid(page, 'unpair').click();
+  await check(page, 'unpair-solo-warning');
+  await expectInViewport(page, tid(page, 'unpair-confirm'), 'unpair confirm (solo)');
+  await expectInViewport(page, tid(page, 'unpair-solo-warning'), 'solo warning');
+  await tid(page, 'unpair-cancel').click();
+  for (const t of ['watchlist', 'matches', 'history', 'new']) {
+    await openTab(page, t as 'watchlist');
+    await check(page, `solo-tab-${t}`);
+  }
 });
