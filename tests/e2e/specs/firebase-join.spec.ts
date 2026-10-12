@@ -24,8 +24,8 @@ test('join by invite link: the link shows "Join <name>", the newcomer joins thro
   for (const p of [A, B.page]) await expect.poll(async () => Object.keys(await memberIds(p)).sort(), { timeout: 45_000 }).toEqual(['Alex', 'Sam']);
   // each sees the other's name on the who-picker
   await openTab(A, 'tonight');
-  await expect(A.locator('[data-testid^="who-"]', { hasText: 'Sam' })).toBeVisible({ timeout: 45_000 });
-  await expect(B.page.locator('[data-testid^="who-"]', { hasText: 'Alex' })).toBeVisible({ timeout: 45_000 });
+  await expect(A.locator('[data-testid^="who-m"]', { hasText: 'Sam' })).toBeVisible({ timeout: 45_000 });
+  await expect(B.page.locator('[data-testid^="who-m"]', { hasText: 'Alex' })).toBeVisible({ timeout: 45_000 });
 
   // a third phone, joining the same way (the invite now names both)
   const { link: link2 } = await makeInvite(A);
@@ -67,14 +67,15 @@ test('a used link is refused with a plain message; so is a wrong code; a duplica
   const C = await newPhone(browser, testInfo);
   g.phones.push(C);
   await C.page.goto(withDebug(link));
+  await expect(tid(C.page, 'welcome').or(tid(C.page, 'invite-preview'))).toBeVisible({ timeout: 30_000 });
   if (await tid(C.page, 'welcome').isVisible()) await tid(C.page, 'continue-in-browser').click();
-  await expect(tid(C.page, 'invite-error')).toBeVisible({ timeout: 30_000 });
-  await expect(tid(C.page, 'invite-error')).toContainText(/already been used|isn.t right/i);
+  await expect(tid(C.page, 'invite-stale-note')).toBeVisible({ timeout: 30_000 });
   await expect(tid(C.page, 'invite-members')).toHaveCount(0); // nothing about the household is shown
-  await expect(tid(C.page, 'invite-error')).not.toContainText(/permission|undefined|Error:/i);
+  await expect(tid(C.page, 'invite-stale-note')).not.toContainText(/permission|undefined|Error:/i);
+  await expect(tid(C.page, 'start-household')).toBeVisible();
 
   // a wrong code typed by hand
-  await tid(C.page, 'invite-other-code').click();
+  await tid(C.page, 'have-code').click();
   await tid(C.page, 'code-input').fill('ZZZ999');
   await tid(C.page, 'code-submit').click();
   await expect(tid(C.page, 'invite-error')).toContainText(/isn.t right|check it/i, { timeout: 30_000 });

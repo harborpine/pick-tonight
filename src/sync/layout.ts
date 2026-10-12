@@ -40,6 +40,8 @@ export interface HouseholdDoc {
   uids: Record<string, string>;
   /** The most recent invite code (may be used/expired). */
   inviteCode?: string;
+  /** The latest rename ({id, name}); lets the rules check the new name. */
+  lastRename?: { id: string; name: string };
   /** Set while "Delete everything" is under way: only deletes are accepted. */
   deleting?: boolean;
 }

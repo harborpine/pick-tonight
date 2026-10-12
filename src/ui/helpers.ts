@@ -392,3 +392,40 @@ export function neighbourStep(role: WizardRole, step: WizardStep, dir: -1 | 1): 
 
 export const SOLO_LOSS_WARNING =
   'Because there is no sign-in, if you are the only person in this household and you lose or reset this phone, your lists are gone for good — there is nobody left to invite you back. Invite someone you trust if you want a safety net.';
+
+// ---------------------------------------------------------------------------
+// Invite codes this phone has already used (or found dead), so a link that stays in the address is ignored
+// ---------------------------------------------------------------------------
+
+export const SPENT_CODES_KEY = 'pt.spentInvites.v1';
+const MAX_SPENT = 20;
+
+/** Read a stored list defensively: only short strings survive. */
+export function parseSpentCodes(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((c): c is string => typeof c === 'string' && c.length > 0 && c.length <= 12).slice(-MAX_SPENT);
+}
+
+/** The list with `code` added (normalised, no duplicates, newest kept). */
+export function addSpentCode(list: string[], code: string): string[] {
+  const c = normalizeCode(code);
+  if (!c) return list;
+  return [...list.filter((x) => x !== c), c].slice(-MAX_SPENT);
+}
+
+export function isSpentCode(list: string[], code: string | null | undefined): boolean {
+  return !!code && list.includes(normalizeCode(code));
+}
+
+/** The address's invite code, unless this phone has already used it or found it dead. */
+export function usableAddressCode(code: string | null, spent: string[]): string | null {
+  return code && !isSpentCode(spent, code) ? code : null;
+}
+
+/** True when a failure message sounds like a connection problem rather than a bad code (so the code is not written off). */
+export function looksOffline(message: string): boolean {
+  return /offline|internet|connection|network|try again later|timed out|busy/i.test(message);
+}
+
+export const STALE_INVITE_NOTE =
+  'That invite link has already been used or has expired — ask for a new one, or start your own household.';

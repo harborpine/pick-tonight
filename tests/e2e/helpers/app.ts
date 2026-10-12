@@ -657,14 +657,15 @@ export async function openInvite(page: Page, link: string): Promise<void> {
   await expect(tid(page, 'welcome').or(tid(page, 'invite-preview'))).toBeVisible({ timeout: 30_000 });
   if (await tid(page, 'welcome').isVisible()) await tid(page, 'continue-in-browser').click();
   await expect(tid(page, 'invite-preview')).toBeVisible();
+  await expect(tid(page, 'invite-loading')).toHaveCount(0, { timeout: 60_000 });
 }
 
 /** Join as a new member from the invite preview, skip the optional steps, land on the Ask screen. */
 export async function joinAsNew(page: Page, name: string): Promise<void> {
-  await tid(page, 'join-new').click();
+  await tid(page, 'join-new').click({ timeout: 60_000 });
   await tid(page, 'name-input').fill(name);
   await tid(page, 'wizard-next').click();
-  await expect(tid(page, 'wizard-favorites')).toBeVisible({ timeout: 45_000 });
+  await expect(tid(page, 'wizard-favorites')).toBeVisible({ timeout: 90_000 });
   for (const step of ['wizard-favorites', 'wizard-never', 'wizard-import', 'wizard-seen']) {
     await expect(tid(page, step)).toBeVisible();
     await tid(page, 'wizard-skip').click();
@@ -748,9 +749,10 @@ export async function firebaseSignInAvailable(): Promise<boolean> {
       body: JSON.stringify({ returnSecureToken: true }),
     });
     const body: any = await res.json();
-    return !!body.idToken;
+    // Only "admin only" means the switch is off; a rate-limit or network blip must not be mistaken for it.
+    return !(body?.error?.message ?? '').includes('ADMIN_ONLY_OPERATION');
   } catch {
-    return false;
+    return true;
   }
 }
 

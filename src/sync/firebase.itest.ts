@@ -69,7 +69,12 @@ async function untilDevice(sync: FirebaseSyncApi, pred: (d: ReturnType<FirebaseS
   });
 }
 
-async function outsider(): Promise<{ db: Firestore; uid: string }> {
+let sharedOutsider: Promise<{ db: Firestore; uid: string }> | null = null;
+/** One stranger shared by the whole run (anonymous sign-ins are rate-limited per address). */
+function outsider(): Promise<{ db: Firestore; uid: string }> {
+  return (sharedOutsider ??= newOutsider());
+}
+async function newOutsider(): Promise<{ db: Firestore; uid: string }> {
   const app = initializeApp(webConfig, `outsider-${run}-${Math.random().toString(36).slice(2, 6)}`);
   const cred = await signInAnonymously(getAuth(app));
   return { db: initializeFirestore(app, { localCache: memoryLocalCache(), experimentalAutoDetectLongPolling: true }), uid: cred.user.uid };
@@ -86,6 +91,16 @@ const gone = async (db: Firestore, path: string) => {
     expect((e as { code?: string }).code).toContain('permission-denied');
   }
 };
+
+let strangerPhone: FirebaseSyncApi | null = null;
+/** One unpaired phone reused for every "someone new" step (anonymous sign-ins are rate-limited per address). */
+async function stranger(): Promise<FirebaseSyncApi> {
+  if (!strangerPhone) {
+    strangerPhone = phone('S');
+    await strangerPhone.init();
+  }
+  return strangerPhone;
+}
 
 const w = (itemId: string, extra: Record<string, unknown> = {}) => ({ itemId, source: 'manual' as const, snapshot: snap(itemId), ...extra });
 const solo = (who: string[], itemId: string) => ({ kind: 'solo' as const, who, itemId, snapshot: snap(), pick: { type: 'movie' as const }, service: card('x').service });
@@ -137,7 +152,7 @@ describe('a household of four', () => {
     await B.joinWithCode(code, { name: 'Sam', profile: profile([], true) });
     expect(B.getDevice()).toMatchObject({ status: 'paired', memberId: 'm2' });
 
-    const a = await until(A, (s) => Object.keys(s.members).length === 2 && !!s.profiles.m2);
+    const a = await until(A, (s) => Object.keys(s.members).length === 2 && s.profiles.m2!.dealbreakers.horror);
     const b = await until(B, (s) => Object.keys(s.members).length === 2 && s.profiles.m1!.favorites.length === 1);
     expect(b.profiles).toEqual(a.profiles);
     expect(b.settings).toEqual(a.settings);
@@ -159,9 +174,8 @@ describe('a household of four', () => {
     expect(Object.values(four.members).map((m) => m.name)).toEqual(['Alex', 'Sam', 'Kit', 'Robin']);
 
     const c4 = await A.createInvite();
-    expect(await phone('E').previewInvite(c4)).toMatchObject({ full: true });
-    const E = phone('E2');
-    await E.init();
+    const E = await stranger();
+    expect(await E.previewInvite(c4)).toMatchObject({ full: true });
     await expect(E.joinWithCode(c4, { name: 'Fifth', profile: profile() })).rejects.toThrow(/already has 4 people/);
   });
 
@@ -252,6 +266,7 @@ describe('a household of four', () => {
     // The fourth member (not in the audience) can see the session exists.
     const s4 = await until(D, (s) => s.activeSession?.id === id);
     expect(s4.activeSession!.joined).not.toContain('m4');
+    await until(B, (s) => s.activeSession?.id === id);
     await B.joinSession(id, 'm2');
     await C.joinSession(id, 'm3');
     await until(A, (s) => s.activeSession?.joined.length === 3);
@@ -313,9 +328,9 @@ describe('a household of four', () => {
     await A.renameMember('m1', 'ALEXANDER'); // case-only change
     await A.renameMember('m1', 'Alex');
     const code = await C.createInvite();
-    expect((await phone('P1').previewInvite(code)).members.map((m) => m.name)).toEqual(['Alex', 'Sam', 'Kit', 'Robin']);
+    expect((await (await stranger()).previewInvite(code)).members.map((m) => m.name)).toEqual(['Alex', 'Sam', 'Kit', 'Robin']);
     await A.renameMember('m3', 'Kit2'); // the outstanding invite's preview stays fresh
-    expect((await phone('P2').previewInvite(code)).members.map((m) => m.name)).toEqual(['Alex', 'Sam', 'Kit2', 'Robin']);
+    expect((await (await stranger()).previewInvite(code)).members.map((m) => m.name)).toEqual(['Alex', 'Sam', 'Kit2', 'Robin']);
     await C.renameMember('m3', 'Kit');
   });
 
@@ -342,9 +357,9 @@ describe('a household of four', () => {
     await denied(setDoc(doc(db, 'users/x'), { a: 1 }));
 
     // Joining a household with a used code, a wrong code, or someone else's invite fails.
-    const O = phone('O');
-    await O.init();
-    await expect(O.joinWithCode(codeForOutsiders, { name: 'Mallory', profile: profile() })).rejects.toThrow(/already been used/);
+    const O = await stranger();
+    // A code that has been replaced by a newer invite no longer exists.
+    await expect(O.joinWithCode(codeForOutsiders, { name: 'Mallory', profile: profile() })).rejects.toThrow(/isn't right/);
     await expect(O.joinWithCode('ABCDEF', { name: 'Mallory', profile: profile() })).rejects.toThrow(/isn't right/);
     await expect(O.joinWithCode('12', { name: 'Mallory', profile: profile() })).rejects.toThrow(/isn't right/);
     expect(O.getDevice().status).toBe('unpaired');
@@ -382,6 +397,13 @@ describe('a household of four', () => {
     await denied(setDoc(doc(db, PATHS.session(hid)), { id: 'x', startedBy: 'm1', request: {}, deck: Array.from({ length: 401 }, () => ({})), joined: [], yes: {}, passed: {}, matches: [], status: 'open', createdAt: 1 }));
     await denied(setDoc(doc(db, `households/${hid}/evil/x`), { a: 1 }));
     await denied(setDoc(doc(db, 'evil/x'), { a: 1 }));
+    // Renaming: the rules check the length and the unique-name index, not just the app.
+    const hRef = doc(db, PATHS.household(hid));
+    const long = 'y'.repeat(21);
+    await denied(updateDoc(hRef, new FieldPath('members', 'm1', 'name'), long, 'lastRename', { id: 'm1', name: long }, new FieldPath('names', `n:${long}`), 'm1'));
+    await denied(updateDoc(hRef, new FieldPath('members', 'm1', 'name'), 'Sneaky')); // no lastRename
+    await denied(updateDoc(hRef, new FieldPath('members', 'm1', 'name'), 'Sneaky', 'lastRename', { id: 'm2', name: 'Sneaky' })); // wrong member
+    await denied(updateDoc(hRef, new FieldPath('members', 'm1', 'name'), 'Sneaky', 'lastRename', { id: 'm1', name: 'Sneaky' })); // index not updated
     // Household document: no new members by hand, no rewriting who owns whom.
     await denied(updateDoc(doc(db, PATHS.household(hid)), new FieldPath('members', 'm9'), { name: 'Ghost', joinedAt: 1 }, new FieldPath('names', 'n:ghost'), 'm9'));
     await denied(updateDoc(doc(db, PATHS.household(hid)), new FieldPath('owners', 'm2'), A.debug().uid));
@@ -412,8 +434,7 @@ describe('a household of four', () => {
     expect(D.getDevice().error).toMatch(/no longer part of the household/);
     // The freed id is not reused.
     const code = await A.createInvite();
-    const G = phone('G');
-    await G.init();
+    const G = await stranger();
     await G.joinWithCode(code, { name: 'Newcomer', profile: profile() });
     expect(G.getDevice().memberId).toBe('m5');
     // Removing yourself unpairs this phone but not the others.
@@ -431,6 +452,10 @@ describe('a household of four', () => {
     await C.joinWithCode(code, { memberId: 'm3' });
     expect(C.getDevice()).toMatchObject({ status: 'paired', memberId: 'm3' });
     await until(C, (st) => st.profiles.m3!.onboarded);
+    // The code is now used up (until the household makes a newer one).
+    const O2 = await stranger();
+    await expect(O2.joinWithCode(code, { memberId: 'm3' })).rejects.toThrow(/already been used/);
+    await expect(O2.previewInvite(code)).rejects.toThrow(/already been used/);
   });
 });
 

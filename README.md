@@ -1,87 +1,72 @@
-# Putting the app on both iPhones
+# Pick Tonight
 
-The app lives at this address:
+A free app that helps you, or your whole household, decide what to watch. Say who's watching and what you're in the mood for, then swipe through suggestions that are actually on the streaming services you pay for.
 
-**https://harborpine.github.io/what-to-watch/**
+**Open it here:** https://harborpine.github.io/pick-tonight/
 
-It takes about five minutes. Do HG's phone first, then BG's. Both phones need an internet connection for this.
+No account, no ads, no cost. It is a passion project, not a business.
 
-## Part 1 — HG's phone
+## Getting started on an iPhone
 
-1. Open **Safari** (it must be Safari, not Chrome or a link inside another app).
-2. Go to the address above. The quickest way is to text the link to yourself and tap it, then choose "Open in Safari" if it opens somewhere else.
-3. Tap the **Share** button (the square with an arrow pointing up, at the bottom of the screen).
-4. Scroll down the list and tap **Add to Home Screen**.
-5. Tap **Add** (top right). The app's icon now sits on your home screen like any other app.
-6. **Close Safari and open the app from the new home-screen icon.** From now on, always open it from the icon.
-7. On "Who are you?", tap **HG**.
-8. Tap **Start — this is the first phone**.
-9. You'll see a grid of well-known posters. Tap the ones you've already seen, then tap **Done**. (You can skip this and come back to it later from your profile.)
+1. Open the link above in **Safari** (it must be Safari, not Chrome or a link opened inside another app).
+2. Tap the **Share** button (the square with an arrow pointing up).
+3. Scroll down and tap **Add to Home Screen**, then **Add**.
+4. Close Safari and open **Pick Tonight** from its new icon. From now on, always open it from the icon.
+5. Follow the short setup: your name, your streaming services, a few favourites, and anything you never want to see.
 
-## Part 2 — BG's phone
+Step 4 matters. On an iPhone, a page in Safari and the same app on your home screen keep their memory separately, so anything you set up in Safari would not be there when you open the icon.
 
-1. Do steps 1 to 6 above on BG's phone, so the app is on her home screen and opened from its icon.
-2. On "Who are you?", tap **BG**.
-3. Tap **I have a code**.
-4. Now on **HG's phone**: tap **Us** (bottom right), then **Settings**, then **Show a pairing code**. A 6-character code appears.
-5. Type that code into BG's phone and tap **Join**.
-6. BG ticks off what she's seen and taps **Done**.
+## Adding other people (up to four in a household)
 
-That's it. The two phones are now linked, and only these two phones can see your lists.
+1. In the app, tap **Us**, then **Settings**, then **Invite someone**.
+2. Send them the link (or read them the 6-character code).
+3. They open the link in Safari, add it to their home screen as above, and open it from the icon. It should recognise the invite; if it doesn't, they tap **I have an invite code** and type the code.
+4. They choose **I'm new** and do their own setup.
 
-## Good to know
+An invite works once and lasts 24 hours. Make a new one for each person.
 
-- **The code works once and lasts 15 minutes.** If it runs out, just tap **Show a pairing code** again for a new one.
-- **Always open the app from the home-screen icon**, not from Safari. The icon version and the Safari version don't share their memory, so pairing done in one doesn't carry over to the other.
-- **Deciding together:** one of you picks *Together* and taps **Show me**. The other phone shows a "join" prompt as long as the app is open. You each swipe on your own phone; when you've both said yes to the same thing, both phones show the match.
-- **Swiping:** right = yes, left = not tonight (it can come back another day). The buttons under the card are *Seen it*, *Save* (to a watchlist) and *Never*.
-- **Swiping right on your own** keeps you on the deck. Your yeses collect in the **Matches** tab, alongside everything the two of you matched on together. Anything sitting in Matches stops being suggested until you deal with it.
-- **Matches vs History:** *Matches* is what you've said yes to. *History* is only what you've actually watched. In Matches, tap a title and choose **I watched this** (or **We watched this**) to move it to History, or **Remove** to put it back in circulation.
-- **"Either" means mostly new:** about one suggestion in ten is something you've seen before.
-- **New seasons and spinoffs** of things you've watched appear at the top of the **New** tab. A dot on the tab means there's one you haven't looked at yet.
-- **Saying yes in Together mode needs internet.** Everything else still works with a weak connection and catches up afterwards.
-- **The catalogue refreshes itself every morning.** You don't need to do anything.
-- **If you change a streaming plan**, update it under **Us → Settings**. The suggestions follow straight away.
+## How it works
 
-## Importing what you've already watched
+- **Tonight** — choose who's watching, how closely you'll be paying attention, your mood and how long you have, then swipe. Right is yes, left is "not tonight". Buttons under each card: *Seen it*, *Save*, and *Never*.
+- **Watching together** — pick two or more people and everyone swipes the same cards on their own phone. When everyone has said yes to the same thing, every phone shows a match.
+- **Matches** — everything you've said yes to. Tap one to see where to watch it, then **I watched this** or **Remove**.
+- **History** — only what you've actually watched.
+- **New** — new seasons and spinoffs of things you've watched, then what has just arrived on your services.
+- **Watchlist** — your own list, plus a shared one for the household.
+- **Us** — each person's favourites and tastes, and Settings.
 
-The more the app knows you've watched, the better it gets: those titles stop showing up as "new", and it learns your taste from them. You can load your Netflix history in a couple of minutes.
+The more it knows, the better it gets. The fastest way to teach it is to import your Netflix history: **Us**, your name, **Import what you've watched**. In a browser, go to netflix.com, then Account, Profiles, your profile, Viewing activity, and **Download all** at the bottom. Use that per-profile file, not Netflix's whole-account "request my data" export, which mixes everyone's viewing together.
 
-**Get the file from Netflix** (easiest on a computer, but it works in Safari on the phone too):
+## Things to know before you rely on it
 
-1. Go to **netflix.com** in a browser (not the Netflix app) and sign in.
-2. Open **Account**, then **Profiles**, and choose **your own** profile.
-3. Choose **Viewing activity**.
-4. Scroll to the very bottom and tap **Download all**. You get a file called *NetflixViewingHistory.csv*.
-5. If you did this on a computer, send the file to your phone (AirDrop, or email it to yourself and save it to **Files**).
+- **There is no sign-in, so your phone is your key.**
+  - If you get a new phone, or the app forgets you, someone else in your household can let you back in: **Us → Settings → Invite someone** (or **Let a member back in**), then you choose **I'm already a member**.
+  - **If you use it on your own and lose your phone, your lists are gone.** There is nobody to invite you back.
+  - Deleting the app from your home screen forgets you on that phone. If you do that as the only member, the same applies.
+- **Suggestions are only as good as the data.** Where-to-watch information comes from TMDB and JustWatch and is refreshed every morning. Now and then a title will have left a service a few days earlier, or be locked to a more expensive plan than yours.
+- **It runs on free services.** If a lot of people use it on the same day it can hit its free limit, and it will say it's busy until the next day. Your lists are safe when that happens.
+- **United States only** for now.
+- **It may not last forever.** It depends on free services that can change their terms.
 
-**Load it into the app:**
+## Privacy
 
-1. Open the app, tap **Us**, then your own name.
-2. Find **Import what you've watched** and choose the file.
-3. The app shows what it found, including a list of anything it couldn't match. Nothing is saved yet.
-4. Tap **Add to my History**.
+- **What is stored:** the names people type, the streaming services you chose, favourites, your watched, never, watchlist and matches lists, and what the app has learned about your taste.
+- **What is not:** no email address, no phone number, no location, no contacts, no analytics, no tracking, no ads.
+- **Where:** in Google's Firebase service, readable only by the phones in your household.
+- **Deleting it:** **Us → Settings → Delete everything** permanently removes your whole household for everyone in it. It cannot be undone.
 
-Each of you does this for your own Netflix profile, on your own page.
+## Credits
 
-Good to know:
-
-- **Use the per-profile "Download all" file.** Netflix's other export (the "request my data" one for the whole account) mixes together everyone who uses the account, and the app can't separate it.
-- **Loading the same file twice is harmless.** Nothing gets doubled.
-- **Some titles won't match**, usually obscure ones or ones Netflix names differently. You can add any of them by hand: **History** tab, then **Add something I've watched**.
-- **Other services** (Hulu, Disney+, HBO Max, Peacock, Paramount+, Prime Video) only hand over your history through a "request my data" form on their website, which can take days. If you get such a file you can try it the same way, or paste a plain list of titles instead. These haven't been tested the way Netflix's file has.
+This product uses the TMDB API but is not endorsed or certified by TMDB. Streaming availability data provided by JustWatch.
 
 ## If something goes wrong
 
 | What you see | What to do |
 |---|---|
-| "That code was made on HG's phone, so this phone should be BG" | You picked the same person on both phones. Tap **Back**, then **Not BG?** / **Not HG?** and choose the other person. |
-| The code is refused | It has expired or was already used. Make a fresh one on the other phone. |
-| One phone suddenly asks "Who are you?" again | That phone has forgotten the pairing (iPhones sometimes clear an app's memory if it hasn't been opened for weeks, or if you delete the icon). Choose the same person as before, tap **I have a code**, and use a new code from the *other* phone. Nothing is lost. |
-| **Both** phones ask "Who are you?" | This is the one case where the shared lists can't be recovered. Start again from Part 1. To avoid it, don't delete the app from both phones at the same time. |
-| A new phone | Install the app on it and join with a code from the other person's phone. The old phone for that person is signed out automatically. |
-| The app looks out of date or stuck | Close it fully (swipe it away in the app switcher) and open it again. |
-
-## Renaming the app
-
-The name ("Tonight") is a working name. Ask Claude to "rename the app to ___" and it changes everywhere, including under the home-screen icon (you'd then remove the old icon and add it again; your data stays, as long as you re-pair that phone with a code from the other one).
+| The app asks you to set up again | It has forgotten you on this phone. Ask someone in your household for an invite and choose **I'm already a member**. |
+| "That code isn't right" or "already been used" | Invites work once and last 24 hours. Ask for a new one. |
+| "This household is full" | Four people is the limit. An existing member with a new phone can still get back in by choosing **I'm already a member**. |
+| "Pick Tonight is very busy today" | The free daily limit was reached. Try again tomorrow; nothing is lost. |
+| "This phone was signed out" | Someone joined as you from another phone. If that wasn't you, ask a household member for an invite and join again as yourself. |
+| Nothing to swipe | Loosen a choice: more time, *Either* instead of *New*, or *Focused* instead of *Background*. Check your services under **Us → Settings**. |
+| The app looks stuck or out of date | Close it fully (swipe it away in the app switcher) and open it again. |

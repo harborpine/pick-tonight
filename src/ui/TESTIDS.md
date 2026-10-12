@@ -32,6 +32,7 @@ or `data-adfree="true|false"`).
 | `setup` | create-or-join choice |
 | `start-household` | "Start a new household" |
 | `have-code` | "I have an invite code" |
+| `invite-stale-note` | shown on the create-or-join screen when the address's `?join=` code turned out used / expired / wrong. That code is then remembered as dead (`localStorage['pt.spentInvites.v1']`) and ignored on every later launch; a code typed by hand still works. A code is also marked spent when this phone pairs while the address carries it. Connection-type failures do not mark it dead (the retry screen shows instead). |
 | `setup-code`, `code-input`, `code-submit`, `code-back` | type a code (any case; punctuation ignored), continue, back |
 | `invite-preview` | preview screen; `invite-loading`, `invite-title` ("Join Alex and Sam"), `invite-members` (li `data-member-id`), `invite-full` (household full) |
 | `invite-error`, `invite-retry`, `invite-other-code`, `invite-start-own` | the code was wrong/used/expired |

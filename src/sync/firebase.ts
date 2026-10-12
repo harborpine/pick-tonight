@@ -752,7 +752,7 @@ export function createFirebaseSync(opts: FirebaseSyncOptions = {}): FirebaseSync
           };
           delete next.names[nameKey(cur.name)];
           next.names[nameKey(clean)] = memberId;
-          const fields: unknown[] = [new FieldPath('members', memberId, 'name'), clean];
+          const fields: unknown[] = [new FieldPath('members', memberId, 'name'), clean, 'lastRename', { id: memberId, name: clean }];
           if (nameKey(cur.name) !== nameKey(clean)) fields.push(new FieldPath('names', nameKey(cur.name)), deleteField());
           fields.push(new FieldPath('names', nameKey(clean)), memberId);
           return { fields, next };
@@ -1034,7 +1034,15 @@ export function createFirebaseSync(opts: FirebaseSyncOptions = {}): FirebaseSync
         status: 'open',
         createdAt: Date.now(),
       };
-      await send(setDoc(doc(db, PATHS.session(hid)), session)); // replaces any earlier session
+      // Replaces any earlier session. Wait briefly for the server so a quick first swipe (a transaction)
+      // finds the session; if offline, the write stays queued and the start still succeeds locally.
+      const written = setDoc(doc(db, PATHS.session(hid)), session);
+      written.catch((e) => setError(friendlyError(e)));
+      try {
+        await Promise.race([written, new Promise<void>((res) => setTimeout(res, SEEN_CONFIRM_MS))]);
+      } catch (e) {
+        throw new SyncError(friendlyError(e));
+      }
       return id;
     },
     async joinSession(sessionId, member) {

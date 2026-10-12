@@ -95,7 +95,8 @@ test('Delete everything really deletes: the other phones go back to the first sc
     await expect(tid(P, 'device-error')).toBeVisible({ timeout: 90_000 });
     await expect(tid(P, 'device-error')).toContainText('This household was deleted.');
     await expect(tid(P, 'device-error-next')).toBeVisible();
-    await expect(tid(P, 'start-household')).toBeVisible();
+    // (a phone opened from an invite link goes back to that dead link's screen, which also offers a fresh start)
+    await expect(tid(P, 'start-household').or(tid(P, 'invite-start-own'))).toBeVisible();
     // the still-open phone holds nothing of the household any more
     expect(await wtw(P, (w) => w.sync.getState())).toBeNull();
     expect(await wtw(P, (w) => w.sync.getDevice().status)).toBe('unpaired');
@@ -122,10 +123,10 @@ test('Delete everything really deletes: the other phones go back to the first sc
   const D = await newPhone(browser, testInfo);
   g.phones.push(D);
   await openInvite(D.page, link).catch(() => undefined);
-  await expect(tid(D.page, 'invite-error')).toBeVisible({ timeout: 45_000 });
+  await expect(tid(D.page, 'invite-stale-note').or(tid(D.page, 'invite-error'))).toBeVisible({ timeout: 45_000 });
   await expect(tid(D.page, 'invite-members')).toHaveCount(0);
   await expect(D.page.getByText(/Alex|Sam|Kit/)).toHaveCount(0);
   // and a new household can be started on the same phones straight away
-  await tid(B, 'start-household').click();
+  await (await tid(B, 'start-household').count() ? tid(B, 'start-household') : tid(B, 'invite-start-own')).click();
   await expect(tid(B, 'setup-name')).toBeVisible();
 });

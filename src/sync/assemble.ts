@@ -57,9 +57,12 @@ function readWatch(map: Record<string, string> | undefined, list: string, into: 
 export function assembleState(parts: RawParts): SharedState {
   const hh = parts.household;
   const sh = parts.shared ?? {};
+  const raw: Record<MemberId, Member> = {};
+  for (const [id, m] of Object.entries(hh?.members ?? {})) raw[id] = { id, name: m.name, joinedAt: m.joinedAt };
+  const ids = memberOrder(raw);
+  // Keyed in join order, so Object.keys / Object.values(state.members) read naturally.
   const members: Record<MemberId, Member> = {};
-  for (const [id, m] of Object.entries(hh?.members ?? {})) members[id] = { id, name: m.name, joinedAt: m.joinedAt };
-  const ids = memberOrder(members);
+  for (const id of ids) members[id] = raw[id]!;
 
   const profiles: SharedState['profiles'] = {};
   const seen: SharedState['seen'] = {};

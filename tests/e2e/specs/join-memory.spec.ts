@@ -63,13 +63,14 @@ test('a used invite and a wrong code are refused with a plain message and a way 
   await page.evaluate(() => sessionStorage.removeItem('pt.install.skipped'));
   await page.goto(`${MEM_URL}&join=${code}`);
   await tid(page, 'continue-in-browser').click();
-  await expect(tid(page, 'invite-error')).toBeVisible();
-  await expect(tid(page, 'invite-error')).toContainText(/already been used|isn.t right/i);
-  await expect(tid(page, 'invite-error')).not.toContainText(/undefined|Error:|permission/i);
-  await expect(tid(page, 'invite-retry')).toBeVisible();
-  await expect(tid(page, 'invite-start-own')).toBeVisible();
-  // typing a wrong code by hand
-  await tid(page, 'invite-other-code').click();
+  // a dead link in the address: a plain note and the normal create-or-join screen
+  // (a code this phone already used is ignored silently; one that fails the check shows a note)
+  await expect(tid(page, 'start-household')).toBeVisible();
+  for (const note of await tid(page, 'invite-stale-note').allTextContents()) expect(note).not.toMatch(/undefined|Error:|permission/i);
+  await expect(tid(page, 'start-household')).toBeVisible();
+  await expect(tid(page, 'invite-members')).toHaveCount(0);
+  // typing a wrong code by hand still gets a plain refusal
+  await tid(page, 'have-code').click();
   await tid(page, 'code-input').fill('zzz-999');
   await tid(page, 'code-submit').click();
   await expect(tid(page, 'invite-error')).toContainText(/isn.t right|check it/i);

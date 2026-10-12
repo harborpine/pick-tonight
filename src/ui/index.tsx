@@ -15,7 +15,7 @@ import {
   type Tab,
   type ToastAction,
 } from './context';
-import { inSession, needsToJoin, nextUnshownMatch, snapshotOf, todayLocal } from './helpers';
+import { SPENT_CODES_KEY, addSpentCode, inSession, needsToJoin, nextUnshownMatch, parseSpentCodes, snapshotOf, todayLocal, usableAddressCode } from './helpers';
 import { History } from './History';
 import { Watchlist } from './Lists';
 import { Matches } from './Matches';
@@ -81,6 +81,14 @@ export function App({ services }: AppProps) {
   }, [services]);
 
   const me: MemberId | null = device.memberId;
+
+  // Joining (or otherwise pairing) with the address's ?join= code uses it up. The installed icon keeps that address
+  // forever, so remember the code on this phone and ignore it from then on.
+  useEffect(() => {
+    if (device.status === 'paired' && services.joinCode) {
+      writeLocal(SPENT_CODES_KEY, addSpentCode(parseSpentCodes(readLocal<unknown>(SPENT_CODES_KEY, [])), services.joinCode));
+    }
+  }, [device.status, services.joinCode]);
   const members = useMemo(() => (state ? memberOrder(state.members).map((id) => state.members[id]) : []), [state]);
   const isSolo = members.length <= 1;
   const session = state?.activeSession ?? null;
@@ -242,7 +250,10 @@ export function App({ services }: AppProps) {
   if (device.status === 'unpaired' || !me) {
     return (
       <Shell>
-        <Setup services={services} device={device} />
+        <Setup
+          services={{ ...services, joinCode: usableAddressCode(services.joinCode, parseSpentCodes(readLocal<unknown>(SPENT_CODES_KEY, []))) }}
+          device={device}
+        />
       </Shell>
     );
   }

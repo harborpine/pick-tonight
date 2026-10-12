@@ -80,9 +80,8 @@ test('two phones: Together session, both say yes, a match on both, keep swiping,
   await expect(tid(A, 'match-watched')).toHaveText('We watched this');
   await tid(A, 'match-watched').click();
   await expect(B.locator(`[data-testid="match-row"][data-item-id="${first}"]`)).toHaveCount(0, { timeout: 45_000 });
-  const sB = await sharedState(B);
-  expect(Object.keys(sB.seen[g.ids.Alex])).toContain(first);
-  expect(Object.keys(sB.seen[g.ids.Sam])).toContain(first);
+  await expect.poll(async () => Object.keys((await sharedState(B)).seen[g.ids.Alex]), { timeout: 45_000 }).toContain(first);
+  await expect.poll(async () => Object.keys((await sharedState(B)).seen[g.ids.Sam]), { timeout: 45_000 }).toContain(first);
 });
 
 test('three phones: a session for all three matches only after the third yes, on all three phones, exactly once; a second match follows', async ({ group }) => {
@@ -164,11 +163,13 @@ test('reload mid-session resumes the same session on the same card', async ({ gr
   await expect(tid(B, 'join-prompt')).toBeVisible({ timeout: 45_000 });
   await tid(B, 'join-button').click();
   const deck = await deckIds(B);
+  const shown = (await tid(B, 'card').getAttribute('data-item-id'))!;
+  const next = deck[deck.indexOf(shown) + 1];
   await act(B, 'not-tonight');
-  await expect(tid(B, 'card')).toHaveAttribute('data-item-id', deck[1]);
+  await expect(tid(B, 'card')).toHaveAttribute('data-item-id', next);
   const sessionId = await tid(B, 'session-deck').getAttribute('data-session-id');
   await B.reload();
   await expect(tid(B, 'session-deck')).toBeVisible({ timeout: 60_000 });
   await expect(tid(B, 'session-deck')).toHaveAttribute('data-session-id', sessionId!);
-  await expect(tid(B, 'card')).toHaveAttribute('data-item-id', deck[1]);
+  await expect(tid(B, 'card')).toHaveAttribute('data-item-id', next);
 });

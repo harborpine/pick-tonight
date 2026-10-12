@@ -2,7 +2,7 @@
 
 `createSync({mode:'firebase'})` -> `firebase.ts`. `createSync({mode:'memory'})` -> `memory.ts` (one device, localStorage; never imports the Firebase SDK).
 Shared pure logic: `match.ts` (N-person match decision), `assemble.ts` (documents -> `SharedState`), `pairing.ts` (invite codes, name rules), `seen.ts` (watched-list helpers), `errors.ts` (plain-language messages).
-Project: `pick-tonight-5tkr8` (never the private app's project). Anonymous sign-in must be enabled in the Firebase console.
+Project: `pick-tonight-5tkr8` (never the private app's project). Anonymous sign-in must be enabled in the Firebase console. **Auto clean-up of anonymous accounts is deliberately OFF** (it would delete users after 30 days and lock people out of their households): never rely on it or turn it on.
 
 ## Who is a member
 
@@ -54,8 +54,9 @@ Every edit is field-level (`set` merge / `updateDoc` of one path / `arrayUnion` 
 
 * Only live member uids can read or write anything under a household. Nothing is listable (households, invites, ...). Any path not named below is denied.
 * Outsiders: read one invite by exact code; perform the validated join batch. Nothing else.
-* Caps enforced by rules: 4 members, names 1..20 chars (on create/join), member numbers <= 999, `uids` <= 16, watched shard <= 2,500 titles, month doc <= 1,500 picks, per-member never <= 3,000 / notTonight <= 1,500 / watchlist <= 1,000, `ours` <= 1,000, 40 favourites, 400 learned keywords, 400 deck cards, 4 session members; only these document ids are allowed (`shared`, `m<n>`, `m<n>_<0-7>`, `YYYY-MM`, `current`), so a household has a bounded number of documents. Every document is also bounded by Firestore's own 1 MiB limit.
-* Known rule limits: renaming an existing member is length-checked by the app, not by the rules (a member can only affect their own household); name uniqueness uses the lower-cased name (a few non-English capital letters may lower-case differently in the rules and in JavaScript, which would refuse that join rather than allow a duplicate); string values inside maps are not individually size-checked.
+* Caps enforced by rules: 4 members, names 1..20 chars (create/join/rename), member numbers <= 999, `uids` <= 16, watched shard <= 2,500 titles, month doc <= 1,500 picks, per-member never <= 3,000 / notTonight <= 1,500 / watchlist <= 1,000, `ours` <= 1,000, 40 favourites, 400 learned keywords, 400 deck cards, 4 session members; only these document ids are allowed (`shared`, `m<n>`, `m<n>_<0-7>`, `YYYY-MM`, `current`), so a household has a bounded number of documents. Every document is also bounded by Firestore's own 1 MiB limit.
+* Renames are checked by the rules too: exactly one member changes, the new name is 1..20 chars, `lastRename` agrees, and the unique-name index matches.
+* Known rule limits: name uniqueness uses the lower-cased name (a few non-English capital letters may lower-case differently in the rules and in JavaScript, which would refuse that join rather than allow a duplicate); string values inside maps are not individually size-checked.
 
 ## Residual abuse / cost risk (honest)
 

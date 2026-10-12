@@ -3,6 +3,11 @@ import { FIXTURE_MEMBERS } from '../contracts/fixtures/catalog';
 import type { DeckCard, Member, PickEntry, TogetherSession } from '../contracts';
 import {
   TIME_OPTIONS,
+  addSpentCode,
+  isSpentCode,
+  looksOffline,
+  parseSpentCodes,
+  usableAddressCode,
   buildInviteLink,
   cleanWho,
   filterPicks,
@@ -339,5 +344,32 @@ describe('first-run steps', () => {
     expect(neighbourStep('joiner', 'favorites', -1)).toBe('name');
     expect(neighbourStep('creator', 'seen', 1)).toBeNull();
     expect(neighbourStep('creator', 'name', -1)).toBeNull();
+  });
+});
+
+describe('spent invite codes', () => {
+  it('reads a stored list defensively', () => {
+    expect(parseSpentCodes(['ABC234', 5, '', 'x'.repeat(30)])).toEqual(['ABC234']);
+    expect(parseSpentCodes('nope')).toEqual([]);
+    expect(parseSpentCodes(null)).toEqual([]);
+  });
+  it('adds a normalised code once and keeps only the newest 20', () => {
+    expect(addSpentCode([], 'abc-234')).toEqual(['ABC234']);
+    expect(addSpentCode(['ABC234', 'XYZ789'], 'ABC234')).toEqual(['XYZ789', 'ABC234']);
+    const many = Array.from({ length: 25 }, (_, i) => `C${i}`).reduce<string[]>((l, c) => addSpentCode(l, c), []);
+    expect(many.length).toBe(20);
+    expect(many[19]).toBe('C24');
+    expect(addSpentCode(['A1'], '  ')).toEqual(['A1']);
+  });
+  it('ignores the address code once spent, but a different code still works', () => {
+    expect(usableAddressCode('ABC234', [])).toBe('ABC234');
+    expect(usableAddressCode('ABC234', ['ABC234'])).toBeNull();
+    expect(usableAddressCode('NEW567', ['ABC234'])).toBe('NEW567');
+    expect(usableAddressCode(null, [])).toBeNull();
+    expect(isSpentCode(['ABC234'], 'abc234')).toBe(true);
+  });
+  it('does not write a code off when the problem sounds like the connection', () => {
+    expect(looksOffline('You appear to be offline. Check your internet connection.')).toBe(true);
+    expect(looksOffline('That invite code is not valid, or it has already been used.')).toBe(false);
   });
 });

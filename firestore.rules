@@ -80,17 +80,36 @@ service cloud.firestore {
       function memberUpdate(o, n) {
         return liveMember(o)
           && !o.get('deleting', false)
-          && n.diff(o).affectedKeys().hasOnly(['members', 'names', 'owners', 'uids', 'inviteCode', 'deleting'])
+          && n.diff(o).affectedKeys().hasOnly(['members', 'names', 'owners', 'uids', 'inviteCode', 'deleting', 'lastRename'])
           && n.members.size() >= 1
           && n.members.size() <= 4
           && n.names.size() == n.members.size()
           && n.members.diff(o.members).addedKeys().size() == 0
+          && (n.members.diff(o.members).changedKeys().size() == 0 || validRename(o, n))
           && n.owners.diff(o.owners).addedKeys().size() == 0
           && n.owners.diff(o.owners).changedKeys().size() == 0
           && n.uids.diff(o.uids).addedKeys().size() == 0
           && n.uids.diff(o.uids).changedKeys().size() == 0
           && (!('deleting' in n) || n.deleting == true)
           && (!('inviteCode' in n) || (n.inviteCode is string && n.inviteCode.size() == 6));
+      }
+
+      // A rename changes exactly one member and says which (and to what) in `lastRename`, so the rules can
+      // check the new name's length and that the unique-name index matches it.
+      function validRename(o, n) {
+        let ch = n.members.diff(o.members).changedKeys();
+        return ch.size() == 1
+          && 'lastRename' in n
+          && n.lastRename.keys().hasOnly(['id', 'name'])
+          && n.lastRename.id is string
+          && n.lastRename.name is string
+          && n.lastRename.name.size() >= 1
+          && n.lastRename.name.size() <= 20
+          && ch.hasOnly([n.lastRename.id])
+          && n.members[n.lastRename.id].keys().hasOnly(['name', 'joinedAt'])
+          && n.members[n.lastRename.id].name == n.lastRename.name
+          && n.members[n.lastRename.id].joinedAt == o.members[n.lastRename.id].joinedAt
+          && n.names['n:' + n.lastRename.name.lower()] == n.lastRename.id;
       }
 
       // An outsider joins with the household's current invite, in the same batch that marks it used.

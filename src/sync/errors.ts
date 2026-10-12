@@ -21,6 +21,7 @@ export const MSG = {
   expiredCode: 'That invite has run out of time (they last 24 hours). Ask for a new one.',
   full: 'That household already has 4 people. If you are one of them, choose "I\'m already a member".',
   nameTaken: 'Someone in this household already has that name. Please pick a different one.',
+  tooMany: 'Too many tries from this phone just now. Please wait a few minutes and try again.',
   sessionGone: 'That Together session is no longer open.',
   deleted: 'This household was deleted.',
   removed: 'This phone is no longer part of the household. Join again with a new invite if you want to come back.',
@@ -38,6 +39,7 @@ export function friendlyError(e: unknown, fallback: string = MSG.generic): strin
   if (e instanceof SyncError) return e.message;
   const code = (e as { code?: unknown } | null)?.code;
   if (typeof code === 'string') {
+    if (code.includes('too-many-requests')) return MSG.tooMany;
     if (code.includes('resource-exhausted')) return MSG.quota;
     if (code.includes('permission-denied')) return MSG.denied;
     if (code.includes('unavailable') || code.includes('deadline') || code.includes('network')) return MSG.offline;

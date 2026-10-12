@@ -3,8 +3,8 @@ import { MAX_NAME_LENGTH, subscribedServices, type AppServices, type DeviceState
 import { APP_NAME, APP_TAGLINE } from '../config';
 import { ServicesPicker, keepVisible } from './Pickers';
 import { WizardFrame, writeMarker } from './Wizard';
-import { plainError } from './context';
-import { normalizeCode, spacedCode, validateName, type WizardRole } from './helpers';
+import { plainError, readLocal, writeLocal } from './context';
+import { SPENT_CODES_KEY, STALE_INVITE_NOTE, addSpentCode, looksOffline, normalizeCode, parseSpentCodes, spacedCode, validateName, type WizardRole } from './helpers';
 
 export function Splash({ message }: { message: string }) {
   return (
@@ -67,6 +67,7 @@ export function Setup({ services, device }: { services: AppServices; device: Dev
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [chosen, setChosen] = useState<string | null>(null);
+  const [staleNote, setStaleNote] = useState(false);
 
   // Look at the invite whenever we land on the preview step.
   const [previewTry, setPreviewTry] = useState(0);
@@ -77,7 +78,18 @@ export function Setup({ services, device }: { services: AppServices; device: Dev
     sync
       .previewInvite(code)
       .then((data) => live && setPreview({ status: 'ok', data }))
-      .catch((e) => live && setPreview({ status: 'error', message: plainError(e, 'That invite code didn’t work.') }));
+      .catch((e) => {
+        if (!live) return;
+        const message = plainError(e, 'That invite code didn’t work.');
+        // The link in the address is dead (used / expired / wrong): remember that, and don't dead-end.
+        if (!typedCode && code === services.joinCode && !looksOffline(message)) {
+          writeLocal(SPENT_CODES_KEY, addSpentCode(parseSpentCodes(readLocal<unknown>(SPENT_CODES_KEY, [])), code));
+          setStaleNote(true);
+          setStage('choose');
+          return;
+        }
+        setPreview({ status: 'error', message });
+      });
     return () => {
       live = false;
     };
@@ -240,6 +252,11 @@ export function Setup({ services, device }: { services: AppServices; device: Dev
         <button type="button" className="btn btn-ghost btn-lg" data-testid="have-code" onClick={() => go('code')}>
           I have an invite code
         </button>
+        {staleNote && (
+          <div className="notice warn" data-testid="invite-stale-note" role="status">
+            {STALE_INVITE_NOTE}
+          </div>
+        )}
         {errorBox}
       </div>
     );
