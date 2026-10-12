@@ -17,7 +17,7 @@
  * sitcom shouldn't turn a sitcom-lover's deck upside down).
  * Manual corrections are stored separately and are never touched by learning.
  */
-import type { Catalog, CatalogItem, GenreId, PersonId, Profile, SwipeAction, TasteWeights } from '../contracts';
+import { NO_DEALBREAKERS, type Catalog, type CatalogItem, type Dealbreakers, type GenreId, type Profile, type SwipeAction, type TasteWeights } from '../contracts';
 import { getIndex, nichesOf, traitsOf } from './catalogIndex';
 import { getFavModel, emptyTaste, isImportKey } from './taste';
 import { clamp, round4 } from './util';
@@ -40,14 +40,22 @@ const KEYWORDS_LEARNED = 8;
 const MAX_KEYWORDS = 150;
 const FORGET_BELOW = 0.004;
 
-export function defaultProfile(person: PersonId, catalog: Catalog): Profile {
+/**
+ * Where everybody starts: nothing known. No favourites, no "never show me"
+ * choices, no learned taste. (Picks for such a person are quality-led and
+ * varied — see "cold start" in rank.ts.) A fresh object every time.
+ */
+export function emptyProfile(): Omit<Profile, 'id'> {
+  return { favorites: [], dealbreakers: copyDealbreakers(NO_DEALBREAKERS), taste: emptyTaste(), onboarded: false };
+}
+
+export function copyDealbreakers(d: Dealbreakers | undefined): Dealbreakers {
   return {
-    id: person,
-    favorites: [...(catalog.seedFavorites?.[person] ?? [])],
-    dealbreakers:
-      person === 'BG' ? { horror: true, trueCrime: true, scary: true } : { horror: false, trueCrime: false, scary: false },
-    taste: emptyTaste(),
-    onboarded: false,
+    horror: !!d?.horror,
+    trueCrime: !!d?.trueCrime,
+    scary: !!d?.scary,
+    genres: Array.isArray(d?.genres) ? [...d.genres] : [],
+    subtitled: !!d?.subtitled,
   };
 }
 
@@ -86,7 +94,7 @@ export function learnFromSwipe(profile: Profile, item: CatalogItem, action: Swip
   const next: Profile = {
     ...profile,
     favorites: [...(profile.favorites ?? [])],
-    dealbreakers: { ...profile.dealbreakers },
+    dealbreakers: copyDealbreakers(profile.dealbreakers),
     taste,
   };
   if (rate === 0) return next;
@@ -132,5 +140,5 @@ export function correctTaste(profile: Profile, insightKey: string, correction: '
   const taste = copyTaste(profile.taste);
   if (correction === 'more' || correction === 'less') taste.corrections[insightKey] = correction;
   else delete taste.corrections[insightKey];
-  return { ...profile, favorites: [...(profile.favorites ?? [])], dealbreakers: { ...profile.dealbreakers }, taste };
+  return { ...profile, favorites: [...(profile.favorites ?? [])], dealbreakers: copyDealbreakers(profile.dealbreakers), taste };
 }

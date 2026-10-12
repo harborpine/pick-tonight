@@ -5,7 +5,7 @@ import { useApp } from './context';
 import {
   filterPicks,
   formatDate,
-  otherPerson,
+  memberFilter,
   pickLabel,
   pickText,
   pickWatchers,
@@ -16,33 +16,37 @@ import {
 
 /** The Matches tab: every solo right-swipe and every Together match, newest first. */
 export function Matches() {
-  const { services, state, me, itemById } = useApp();
+  const { services, state, me, members, isSolo, itemById } = useApp();
   const { engine } = services;
-  const other = otherPerson(me);
   const [filter, setFilter] = useState<MatchesFilter>('all');
   const [openId, setOpenId] = useState<string | null>(null);
 
-  const rows = filterPicks(state.picks, filter, me);
+  const activeFilter: MatchesFilter = filter.startsWith('member:') && !state.members[filter.slice(7)] ? 'all' : filter;
+  const rows = filterPicks(state.picks, activeFilter, me);
   const open = openId ? state.picks.find((p) => p.id === openId) ?? null : null;
 
   return (
     <div className="screen with-tabs scroll" data-testid="matches">
       <Header title="Matches" subtitle="Everything you liked, ready to watch" />
-      <Segmented
-        testPrefix="matches-filter"
-        value={filter}
-        onChange={setFilter}
-        options={[
-          { value: 'all', label: 'All' },
-          { value: 'mine', label: 'Mine' },
-          { value: other, label: other },
-          { value: 'together', label: 'Together' },
-        ]}
-      />
+      {!isSolo && (
+        <Segmented
+          testPrefix="matches-filter"
+          value={activeFilter}
+          onChange={setFilter}
+          options={[
+            { value: 'all', label: 'All' },
+            { value: 'mine', label: 'Mine' },
+            ...members.filter((m) => m.id !== me).map((m) => ({ value: memberFilter(m.id), label: m.name, memberId: m.id })),
+            { value: 'together', label: 'Together' },
+          ]}
+        />
+      )}
       {rows.length === 0 ? (
         <p className="empty-note" data-testid="matches-empty">
           {state.picks.length === 0
-            ? 'Nothing here yet. When you swipe right on something, or you and your partner both say yes in Together, it lands here with where to watch it.'
+            ? isSolo
+              ? 'Nothing here yet. When you swipe right on something it lands here, with where to watch it.'
+              : 'Nothing here yet. When you swipe right on something, or everyone in a Together session says yes, it lands here with where to watch it.'
             : 'Nothing in this view yet.'}
         </p>
       ) : (
@@ -57,6 +61,7 @@ export function Matches() {
                   className="row"
                   data-testid="match-row"
                   data-kind={p.kind}
+                  data-who={p.who.join(',')}
                   data-item-id={p.itemId}
                   data-pick-id={p.id}
                   onClick={() => setOpenId(p.id)}
@@ -66,7 +71,7 @@ export function Matches() {
                     <span className="row-title" data-testid="match-title">{p.snapshot.title}</span>
                     <span className="row-sub">
                       <span data-testid="match-year">{p.snapshot.year}</span> {'•'}{' '}
-                      <span className={`tag ${p.kind === 'match' ? 'tag-new' : 'tag-solo'}`} data-testid="match-label">{pickLabel(p)}</span>
+                      <span className={`tag ${p.kind === 'match' ? 'tag-new' : 'tag-solo'}`} data-testid="match-label">{pickLabel(p, state.members)}</span>
                     </span>
                     <span className="row-sub" data-testid="match-pick">{pickText(p.pick)}</span>
                     <span className="row-sub" data-testid="match-where">
@@ -104,7 +109,7 @@ function MatchDetail({ pick, onClose }: { pick: PickEntry; onClose: () => void }
     setBusy(true);
     try {
       const snapshot = { title: pick.snapshot.title, year: pick.snapshot.year, poster: item?.poster ?? pick.snapshot.poster };
-      for (const person of pickWatchers(pick)) {
+      for (const person of pickWatchers(pick, state.members)) {
         await sync.markWatched(person, [{ itemId: pick.itemId, source: 'manual', snapshot }]);
       }
       await sync.removePick(pick.id);
@@ -134,7 +139,7 @@ function MatchDetail({ pick, onClose }: { pick: PickEntry; onClose: () => void }
         <div className="detail-body">
           <h3 data-testid="detail-title">{pick.snapshot.title}</h3>
           <p className="row-sub">
-            {pick.snapshot.year} {'•'} <span data-testid="detail-label">{pickLabel(pick)}</span>
+            {pick.snapshot.year} {'•'} <span data-testid="detail-label">{pickLabel(pick, state.members)}</span>
           </p>
           <p className="detail-what" data-testid="detail-pick">{pickText(pick.pick)}</p>
           <p className="detail-where" data-testid="detail-where">
@@ -150,7 +155,7 @@ function MatchDetail({ pick, onClose }: { pick: PickEntry; onClose: () => void }
       {item && <p className="detail-overview">{item.overview}</p>}
       <div className="sheet-options">
         <button type="button" className="sheet-option primary" data-testid="match-watched" disabled={busy} onClick={watched}>
-          {watchedButtonText(pick, me)}
+          {watchedButtonText(pick, me, state.members)}
         </button>
         <button type="button" className="sheet-option danger" data-testid="match-remove" disabled={busy} onClick={remove}>
           Remove

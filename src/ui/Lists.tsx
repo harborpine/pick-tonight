@@ -2,19 +2,20 @@ import { useState } from 'react';
 import type { WatchlistEntry, WatchlistOwner } from '../contracts';
 import { AdBadge, Header, Poster, Segmented, ServiceLine, Sheet } from './components';
 import { useApp } from './context';
-import { otherPerson, serviceName } from './helpers';
+import { serviceName } from './helpers';
 
-type WTab = 'mine' | 'hers' | 'ours';
+/** 'mine', 'ours', or `member:<id>` for another person's list. */
+type WTab = string;
 
 export function Watchlist() {
-  const { services, state, me, itemById, toast } = useApp();
+  const { services, state, me, members, isSolo, itemById, toast } = useApp();
   const { engine, sync } = services;
-  const other = otherPerson(me);
   const [tab, setTab] = useState<WTab>('mine');
   const [open, setOpen] = useState<WatchlistEntry | null>(null);
 
-  const listFor = (t: WTab): WatchlistOwner => (t === 'mine' ? me : t === 'hers' ? other : 'ours');
-  const entries = state.watchlist.filter((w) => w.list === listFor(tab));
+  const listFor = (t: WTab): WatchlistOwner => (t === 'mine' ? me : t === 'ours' ? 'ours' : t.slice('member:'.length));
+  const activeTab = state.members[listFor(tab)] || listFor(tab) === 'ours' ? tab : 'mine';
+  const entries = state.watchlist.filter((w) => w.list === listFor(activeTab));
 
   const remove = async (e: WatchlistEntry) => {
     try {
@@ -41,19 +42,21 @@ export function Watchlist() {
   return (
     <div className="screen with-tabs scroll" data-testid="watchlist">
       <Header title="Watchlist" />
-      <Segmented
-        testPrefix="watchlist-tab"
-        value={tab}
-        onChange={setTab}
-        options={[
-          { value: 'mine', label: 'Mine' },
-          { value: 'hers', label: other },
-          { value: 'ours', label: 'Ours' },
-        ]}
-      />
+      {!isSolo && (
+        <Segmented
+          testPrefix="watchlist-tab"
+          value={activeTab}
+          onChange={setTab}
+          options={[
+            { value: 'mine', label: 'Mine' },
+            ...members.filter((m) => m.id !== me).map((m) => ({ value: `member:${m.id}`, label: m.name, memberId: m.id })),
+            { value: 'ours', label: 'Ours' },
+          ]}
+        />
+      )}
       {entries.length === 0 ? (
         <p className="empty-note" data-testid="watchlist-empty">
-          Nothing saved here yet. Tap Save on a card to keep something for later.
+          Nothing saved here yet. Tap Save on a card in Tonight or New to keep something for later.
         </p>
       ) : (
         <ul className="rows">

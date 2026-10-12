@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import type { AppProps, CatalogItem, EngineContext, PersonId } from '../contracts';
+import { memberOrder, normalizeWho, subscribedServices, type AppProps, type Catalog, type CatalogItem, type EngineContext, type MemberId } from '../contracts';
 import { THEME_ACCENT, THEME_BACKGROUND } from '../config';
 import { Icon } from './components';
 import {
   AppCtx,
+  EMPTY_CATALOG,
   readLocal,
+  useCatalogState,
   useSyncData,
   writeLocal,
   type AppCtxValue,
@@ -20,14 +22,15 @@ import { Matches } from './Matches';
 import { NewFeed } from './NewFeed';
 import { Onboarding } from './Onboarding';
 import { JoinCard, MatchScreen } from './Overlays';
-import { Setup, Splash } from './Setup';
+import { DeviceErrorBanner, Setup, Splash } from './Setup';
 import { Tonight } from './Tonight';
 import { Us } from './Us';
+import { Wizard } from './Wizard';
 import './styles.css';
 
 declare global {
   interface Window {
-    /** Dev/debug hook (dev server or ?debug=1): the live services, so a second "phone" can be simulated. */
+    /** Dev/debug hook (dev server or ?debug=1): the live services, so other "phones" can be simulated. */
     __wtw?: AppProps['services'];
   }
 }
@@ -41,31 +44,32 @@ const TABS: { id: Tab; label: string; icon: ReactNode }[] = [
   { id: 'us', label: 'Us', icon: Icon.us },
 ];
 
-const SHOWN_KEY = 'wtw.ui.followups.shown.v1';
-const matchKey = (sessionId: string) => `wtw.ui.matchShown.${sessionId}`;
+const SHOWN_KEY = 'pt.ui.followups.shown.v1';
+const matchKey = (sessionId: string) => `pt.ui.matchShown.${sessionId}`;
 
 function debugEnabled(): boolean {
   if (import.meta.env.DEV) return true;
   try {
     if (new URLSearchParams(location.search).get('debug') === '1') {
-      sessionStorage.setItem('wtw.debug', '1');
+      sessionStorage.setItem('pt.debug', '1');
       return true;
     }
-    return sessionStorage.getItem('wtw.debug') === '1';
+    return sessionStorage.getItem('pt.debug') === '1';
   } catch {
     return false;
   }
 }
 
 export function App({ services }: AppProps) {
-  const { catalog, engine, sync } = services;
+  const { engine, sync, catalogs } = services;
   const { device, state } = useSyncData(sync);
+  const catalogState = useCatalogState(catalogs);
+  const catalog = catalogState.catalog;
 
   const [tab, setTab] = useState<Tab>('tonight');
   const [solo, setSolo] = useState<SoloFlow | null>(null);
   const [sessionLeft, setSessionLeft] = useState(false);
-  const [onboardFor, setOnboardFor] = useState<PersonId | null>(null);
-  const [onboardDismissed, setOnboardDismissed] = useState(false);
+  const [onboardFor, setOnboardFor] = useState<MemberId | null>(null);
   const [matchIdx, setMatchIdx] = useState<number | null>(null);
   const [joinDismissed, setJoinDismissed] = useState<string | null>(null);
   const [toastMsg, setToastMsg] = useState<{ id: number; text: string; action?: ToastAction } | null>(null);
@@ -76,10 +80,43 @@ export function App({ services }: AppProps) {
     if (debugEnabled()) window.__wtw = services;
   }, [services]);
 
-  const items = useMemo(() => new Map(catalog.items.map((i) => [i.id, i])), [catalog]);
-  const refs = useMemo(() => new Map(catalog.tasteRefs.map((i) => [i.id, i])), [catalog]);
+  const me: MemberId | null = device.memberId;
+  const members = useMemo(() => (state ? memberOrder(state.members).map((id) => state.members[id]) : []), [state]);
+  const isSolo = members.length <= 1;
+  const session = state?.activeSession ?? null;
+
+  // The catalog follows the household's plans.
+  const serviceKey = state ? subscribedServices(state.settings.plans).join(',') : '';
+  useEffect(() => {
+    if (device.status !== 'paired' || !state) return;
+    void catalogs.load(serviceKey ? serviceKey.split(',') : []).catch(() => {});
+  }, [device.status, serviceKey, !!state, catalogs]); // eslint-disable-line react-hooks/exhaustive-deps
+  const retryCatalog = useCallback(() => {
+    void catalogs.load(serviceKey ? serviceKey.split(',') : []).catch(() => {});
+  }, [catalogs, serviceKey]);
+  const ensureCatalog = useCallback(async (): Promise<Catalog> => {
+    if (!serviceKey) return EMPTY_CATALOG;
+    try {
+      return await catalogs.load(serviceKey.split(','));
+    } catch {
+      return catalogs.get().catalog ?? EMPTY_CATALOG;
+    }
+  }, [catalogs, serviceKey]);
+
+  const items = useMemo(() => new Map((catalog?.items ?? []).map((i) => [i.id, i])), [catalog]);
   const itemById = useCallback((id: string): CatalogItem | undefined => items.get(id), [items]);
-  const titleOf = useCallback((id: string) => items.get(id)?.title ?? refs.get(id)?.title ?? id, [items, refs]);
+
+  // Titles for ids that may not be in the catalog: anything saved with a snapshot, or picked as a favourite.
+  const names = useMemo(() => {
+    const m = new Map<string, string>();
+    if (!state) return m;
+    for (const p of Object.values(state.profiles)) for (const f of p.favorites) m.set(f.id, f.title);
+    for (const per of Object.values(state.seen)) for (const [id, e] of Object.entries(per)) if (e.snapshot) m.set(id, e.snapshot.title);
+    for (const w of state.watchlist) m.set(w.itemId, w.snapshot.title);
+    for (const p of state.picks) m.set(p.itemId, p.snapshot.title);
+    return m;
+  }, [state]);
+  const titleOf = useCallback((id: string) => items.get(id)?.title ?? names.get(id) ?? id, [items, names]);
 
   const toast = useCallback((text: string, action?: ToastAction) => {
     const id = Date.now();
@@ -87,17 +124,14 @@ export function App({ services }: AppProps) {
     window.setTimeout(() => setToastMsg((t) => (t && t.id === id ? null : t)), action ? 6500 : 3200);
   }, []);
 
-  const me: PersonId | null = device.person;
-  const session = state?.activeSession ?? null;
-
   // Leaving the household clears the local flow.
   useEffect(() => {
     if (device.status !== 'paired') {
       setSolo(null);
       setMatchIdx(null);
       setOnboardFor(null);
-      setOnboardDismissed(false);
       setTab('tonight');
+      setSessionLeft(false);
     }
   }, [device.status]);
 
@@ -112,7 +146,7 @@ export function App({ services }: AppProps) {
     if (i >= 0) setMatchIdx(i);
   }, [session, me, matchIdx]);
 
-  // Tell the person when the other phone ends the session.
+  // Tell the person when someone ends the session.
   const wasIn = useRef<string | null>(null);
   useEffect(() => {
     if (!me) return;
@@ -125,25 +159,30 @@ export function App({ services }: AppProps) {
   }, [session, me, toast]);
 
   const engineCtx = useCallback(
-    (): EngineContext => ({ catalog, state: sync.getState() ?? (state as NonNullable<typeof state>), today: todayLocal() }),
+    (): EngineContext => ({
+      catalog: catalog ?? EMPTY_CATALOG,
+      state: sync.getState() ?? (state as NonNullable<typeof state>),
+      today: todayLocal(),
+    }),
     [catalog, sync, state],
   );
 
   const perform = useCallback(
     async (a: PerformArgs) => {
       const st = sync.getState();
-      const meNow = sync.getDevice().person;
+      const meNow = sync.getDevice().memberId;
       if (!st || !meNow) return;
       const { item, action, who, sessionId } = a;
       const snapshot = snapshotOf(item);
-      // Solo: the chosen person. Together: only this phone's person.
-      const actors: PersonId[] = who === 'Together' ? [meNow] : [who];
+      // Alone: the chosen person. A group: only this phone's person (what you do with a card is yours).
+      const actors: MemberId[] = who.length === 1 ? who : [meNow];
+      const cat = catalogs.get().catalog ?? EMPTY_CATALOG;
       try {
         if (sessionId) await sync.swipeInSession(sessionId, meNow, item.id, action === 'yes', snapshot);
         switch (action) {
           case 'yes':
             // Solo yes: onto the Matches tab. No screen change; the deck carries on.
-            if (!sessionId) await sync.addPick({ kind: 'solo', who, itemId: item.id, snapshot, pick: a.pick, service: a.service });
+            if (!sessionId) await sync.addPick({ kind: 'solo', who: normalizeWho(who), itemId: item.id, snapshot, pick: a.pick, service: a.service });
             break;
           case 'not-tonight':
             for (const p of actors) await sync.setNotTonight(p, item.id, todayLocal());
@@ -152,7 +191,7 @@ export function App({ services }: AppProps) {
             for (const p of actors) await sync.markWatched(p, [{ itemId: item.id, source: 'manual', snapshot }]);
             break;
           case 'save':
-            await sync.addToWatchlist(a.list ?? (who === 'Together' ? 'ours' : who), item.id, meNow, snapshot);
+            await sync.addToWatchlist(a.list ?? (who.length > 1 ? 'ours' : who[0]), item.id, meNow, snapshot);
             break;
           case 'never':
             for (const p of actors) await sync.setNever(p, item.id, true);
@@ -160,14 +199,14 @@ export function App({ services }: AppProps) {
         }
         for (const p of actors) {
           const latest = sync.getState();
-          if (!latest) break;
-          await sync.saveProfile(engine.learnFromSwipe(latest.profiles[p], item, action, catalog));
+          if (!latest || !latest.profiles[p]) break;
+          await sync.saveProfile(engine.learnFromSwipe(latest.profiles[p], item, action, cat));
         }
       } catch {
         toast('Something did not save. Please try that again.');
       }
     },
-    [sync, engine, catalog, toast],
+    [sync, engine, catalogs, toast],
   );
 
   const goTab = useCallback((t: Tab) => setTab(t), []);
@@ -181,18 +220,20 @@ export function App({ services }: AppProps) {
     });
   }, []);
 
-  // The dot on the New tab: follow-ups for me or Together that this phone has not displayed yet.
+  // The dot on the New tab: follow-ups for me (or for everyone together) that this phone has not displayed yet.
   const followUpKeys = useMemo(() => {
-    if (!state || !me || device.status !== 'paired') return [] as string[];
+    if (!state || !me || device.status !== 'paired' || !catalog || !state.profiles[me]) return [] as string[];
     try {
       const ctx = engineCtx();
-      return [...engine.followUps(me, ctx), ...engine.followUps('Together', ctx)].map((f) => f.key);
+      const keys = engine.followUps([me], ctx).map((f) => f.key);
+      if (members.length > 1) keys.push(...engine.followUps(normalizeWho(members.map((m) => m.id)), ctx).map((f) => f.key));
+      return keys;
     } catch {
       return [] as string[];
     }
-    // Recomputed only when the shared data (or who/engine) changes, not on unrelated re-renders.
+    // Recomputed only when the shared data (or catalog) changes, not on unrelated re-renders.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state, me, device.status, engine]);
+  }, [state, me, device.status, engine, catalog]);
   const newDot = useMemo(() => {
     const seenKeys = new Set(shownKeys);
     return followUpKeys.some((k) => !seenKeys.has(k));
@@ -208,12 +249,19 @@ export function App({ services }: AppProps) {
     );
   }
   if (!state) return <Shell><Splash message={'Loading your shared lists…'} /></Shell>;
+  if (!state.profiles[me] || !state.members[me]) return <Shell><Splash message={'Loading your shared lists…'} /></Shell>;
 
   const value: AppCtxValue = {
     services,
     state,
     device,
     me,
+    members,
+    isSolo,
+    catalog,
+    catalogState,
+    ensureCatalog,
+    retryCatalog,
     engineCtx,
     itemById,
     titleOf,
@@ -229,7 +277,7 @@ export function App({ services }: AppProps) {
     setSessionLeft,
   };
 
-  const onboardingPerson: PersonId | null = onboardFor ?? (!state.profiles[me].onboarded && !onboardDismissed ? me : null);
+  const needsWizard = !state.profiles[me].onboarded;
 
   const matchShown =
     matchIdx !== null && inSession(session, me) && session.matches[matchIdx] ? session.matches[matchIdx] : null;
@@ -238,19 +286,15 @@ export function App({ services }: AppProps) {
     setMatchIdx(null);
   };
 
-  const showJoinBanner = needsToJoin(session, me) && joinDismissed !== session.id;
+  const showJoinBanner = !needsWizard && needsToJoin(session, me) && joinDismissed !== session.id;
 
   return (
     <AppCtx.Provider value={value}>
       <Shell>
-        {onboardingPerson ? (
-          <Onboarding
-            person={onboardingPerson}
-            onClose={() => {
-              setOnboardFor(null);
-              setOnboardDismissed(true);
-            }}
-          />
+        {needsWizard ? (
+          <Wizard />
+        ) : onboardFor && state.members[onboardFor] ? (
+          <Onboarding memberId={onboardFor} onClose={() => setOnboardFor(null)} />
         ) : (
           <>
             <main className="app-main">
@@ -288,6 +332,7 @@ export function App({ services }: AppProps) {
           <MatchScreen
             item={itemById(matchShown.itemId)}
             card={session.deck.find((c) => c.itemId === matchShown.itemId)}
+            audienceSize={session.request.who.length}
             onKeep={() => {
               dismissMatch();
               setSessionLeft(false);
@@ -304,8 +349,8 @@ export function App({ services }: AppProps) {
         )}
 
         {device.error && (
-          <div className="notice error floating" data-testid="device-error">
-            {device.error}
+          <div className="floating-wrap">
+            <DeviceErrorBanner device={device} />
           </div>
         )}
         {toastMsg && (

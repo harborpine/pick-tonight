@@ -16,7 +16,7 @@ import { createCatalogStore, loadNewArrivals, titleIndexLoader } from './loadCat
  */
 function option(name: string, allowed: string[], fallback: string): string {
   const fromUrl = new URLSearchParams(location.search).get(name);
-  const key = `wtw.opt.${name}`;
+  const key = `pt.opt.${name}`;
   if (fromUrl && allowed.includes(fromUrl)) {
     try {
       sessionStorage.setItem(key, fromUrl);

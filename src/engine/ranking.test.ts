@@ -3,10 +3,10 @@
  * variety, determinism, the New feed, the first-run grid, and speed.
  */
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_PLANS, type Catalog, type CatalogItem, type DeckCard, type TasteRef } from '../contracts';
+import { type Catalog, type CatalogItem, type DeckCard, type Who } from '../contracts';
 import { FIXTURE_CATALOG, FIXTURE_NEW_ARRIVALS } from '../contracts/fixtures/catalog';
 import { createEngine } from './index';
-import { itemsById, makeCtx, req, syntheticCatalog } from './testkit';
+import { ALEX, BOTH, itemsById, makeCtx, PLANS, req, SAM, syntheticCatalog, withFavorites } from './testkit';
 
 const engine = createEngine();
 const byId = itemsById(FIXTURE_CATALOG);
@@ -31,6 +31,7 @@ function title(id: number, over: Partial<CatalogItem> = {}): CatalogItem {
     poster: null,
     backdrop: null,
     overview: '',
+    lang: 'en',
     runtime: 45,
     seasons: 3,
     rating: 7.5,
@@ -45,16 +46,9 @@ function title(id: number, over: Partial<CatalogItem> = {}): CatalogItem {
     ...over,
   };
 }
-const refOf = (i: CatalogItem): TasteRef => ({ id: i.id, tmdbId: i.tmdbId, kind: i.kind, title: i.title, year: i.year, genres: i.genres, keywords: i.keywords, related: i.related });
-function madeUp(items: CatalogItem[], favs: { HG: CatalogItem[]; BG: CatalogItem[] }): Catalog {
-  const all = [...favs.HG, ...favs.BG];
-  return {
-    schema: 1,
-    builtAt: '2026-10-10T00:00:00.000Z',
-    items,
-    tasteRefs: [...new Map(all.map((f) => [f.id, refOf(f)])).values()],
-    seedFavorites: { HG: favs.HG.map((f) => f.id), BG: favs.BG.map((f) => f.id) },
-  };
+/** A made-up catalog, with the favourites alex and sam have picked (the titles need not be in the catalog). */
+function madeUp(items: CatalogItem[], favs: { alex: CatalogItem[]; sam: CatalogItem[] }): Catalog {
+  return withFavorites({ schema: 1, builtAt: '2026-10-10T00:00:00.000Z', items }, favs);
 }
 
 describe('what to watch (choosePick)', () => {
@@ -75,32 +69,32 @@ describe('what to watch (choosePick)', () => {
     const serial: CatalogItem = { ...item('tv-76331'), id: 'tv-900010', tmdbId: 900010, standout: [{ season: 2, episode: 10, name: 'This Is Not for Tears' }] };
     const catalog = { ...FIXTURE_CATALOG, items: [...FIXTURE_CATALOG.items, serial] };
     const fresh = makeCtx({ catalog });
-    expect(engine.choosePick(serial, req({ who: 'HG' }), fresh)?.pick).toEqual({ type: 'series-start' });
-    const hgSeen = makeCtx({ catalog, seen: { HG: [serial.id] } });
-    expect(engine.choosePick(serial, req({ who: 'HG' }), hgSeen)?.pick).toEqual({ type: 'episode', season: 2, episode: 10, name: 'This Is Not for Tears' });
-    // Together, BG would be dropped into the middle of the story: start from the beginning instead.
-    expect(engine.choosePick(serial, req({ who: 'Together' }), hgSeen)?.pick).toEqual({ type: 'series-start' });
-    const bothSeen = makeCtx({ catalog, seen: { HG: [serial.id], BG: [serial.id] } });
-    expect(engine.choosePick(serial, req({ who: 'Together' }), bothSeen)?.pick.type).toBe('episode');
+    expect(engine.choosePick(serial, req({ who: ALEX }), fresh)?.pick).toEqual({ type: 'series-start' });
+    const alexSeen = makeCtx({ catalog, seen: { alex: [serial.id] } });
+    expect(engine.choosePick(serial, req({ who: ALEX }), alexSeen)?.pick).toEqual({ type: 'episode', season: 2, episode: 10, name: 'This Is Not for Tears' });
+    // Together, Sam would be dropped into the middle of the story: start from the beginning instead.
+    expect(engine.choosePick(serial, req({ who: BOTH }), alexSeen)?.pick).toEqual({ type: 'series-start' });
+    const bothSeen = makeCtx({ catalog, seen: { alex: [serial.id], sam: [serial.id] } });
+    expect(engine.choosePick(serial, req({ who: BOTH }), bothSeen)?.pick.type).toBe('episode');
   });
   it('the seed varies which standout episode is named, where there is a choice', () => {
     // Community has two standout episodes in the sample catalog.
     const picks = new Set<string>();
     for (let seed = 1; seed <= 40; seed++) {
-      const card = engine.buildDeck(req({ who: 'HG' }), ctx, { seed, limit: 100 }).find((c) => c.itemId === 'tv-18347');
+      const card = engine.buildDeck(req({ who: ALEX }), ctx, { seed, limit: 100 }).find((c) => c.itemId === 'tv-18347');
       picks.add(card?.pick.type === 'episode' ? card.pick.name : String(card?.pick.type));
     }
     expect(picks.has('Advanced Dungeons & Dragons')).toBe(true);
     expect(picks.has('Modern Warfare')).toBe(true);
     // Seed 0 always names the first (best) one.
-    const plain = engine.buildDeck(req({ who: 'HG' }), ctx, { limit: 100 }).find((c) => c.itemId === 'tv-18347');
+    const plain = engine.buildDeck(req({ who: ALEX }), ctx, { limit: 100 }).find((c) => c.itemId === 'tv-18347');
     expect(plain?.pick).toEqual({ type: 'episode', season: 2, episode: 14, name: 'Advanced Dungeons & Dragons' });
   });
 });
 
 describe('deck basics', () => {
   it('cards carry a pick, a service, minutes and at most three plain-language reasons', () => {
-    for (const who of ['HG', 'BG', 'Together'] as const) {
+    for (const who of [ALEX, SAM, BOTH] as const) {
       const deck = engine.buildDeck(req({ who }), makeCtx());
       expect(deck.length).toBeGreaterThan(5);
       for (const c of deck) {
@@ -118,7 +112,7 @@ describe('deck basics', () => {
 
   it('scores never rise down the deck (higher is better, in order)', () => {
     for (const mood of ['laugh', 'gripped', 'cozy'] as const) {
-      const deck = engine.buildDeck(req({ who: 'Together', mood, genre: mood === 'laugh' ? 'comedy' : null }), makeCtx(), { limit: 100, seed: 3 });
+      const deck = engine.buildDeck(req({ who: BOTH, mood, genre: mood === 'laugh' ? 'comedy' : null }), makeCtx(), { limit: 100, seed: 3 });
       for (let k = 1; k < deck.length; k++) expect(deck[k].score).toBeLessThanOrEqual(deck[k - 1].score);
     }
   });
@@ -131,19 +125,19 @@ describe('deck basics', () => {
   });
 
   it('reasons name the favourites a title resembles', () => {
-    const deck = engine.buildDeck(req({ who: 'HG', novelty: 'new' }), makeCtx(), { limit: 100 });
+    const deck = engine.buildDeck(req({ who: ALEX, novelty: 'new' }), makeCtx(), { limit: 100 });
     const office = deck.find((c) => c.itemId === 'tv-2316')!;
     expect(office.reasons.join(' | ')).toMatch(/Scrubs|Curb Your Enthusiasm/);
-    const own = engine.buildDeck(req({ who: 'HG', novelty: 'rewatch' }), makeCtx()).find((c) => c.itemId === 'tv-4556')!;
+    const own = engine.buildDeck(req({ who: ALEX, novelty: 'rewatch' }), makeCtx()).find((c) => c.itemId === 'tv-4556')!;
     expect(own.reasons[0]).toBe('One of your favourites');
-    const together = engine.buildDeck(req({ who: 'Together' }), makeCtx(), { limit: 100 }).find((c) => c.itemId === 'tv-1434')!;
+    const together = engine.buildDeck(req({ who: BOTH }), makeCtx(), { limit: 100 }).find((c) => c.itemId === 'tv-1434')!;
     expect(together.reasons[0]).toBe('A favourite for both of you');
   });
 });
 
 describe('determinism and the seed', () => {
   it('same inputs give exactly the same deck, every time', () => {
-    for (const who of ['HG', 'BG', 'Together'] as const) {
+    for (const who of [ALEX, SAM, BOTH] as const) {
       const a = engine.buildDeck(req({ who, mood: 'cozy' }), makeCtx());
       const b = createEngine().buildDeck(req({ who, mood: 'cozy' }), makeCtx());
       expect(b).toEqual(a);
@@ -154,7 +148,7 @@ describe('determinism and the seed', () => {
   });
   it('same seed, same deck; different seeds vary the order without changing what is good', () => {
     const ctx = makeCtx({ catalog: syntheticCatalog(600) });
-    const r = req({ who: 'Together', mood: 'laugh' });
+    const r = req({ who: BOTH, mood: 'laugh' });
     const plain = ids(engine.buildDeck(r, ctx));
     const s1 = ids(engine.buildDeck(r, ctx, { seed: 11 }));
     expect(ids(engine.buildDeck(r, ctx, { seed: 11 }))).toEqual(s1);
@@ -171,7 +165,7 @@ describe('mood', () => {
   it('the top of the deck fits the requested mood', () => {
     const ctx = makeCtx();
     for (const mood of ['laugh', 'cozy', 'gripped', 'feelgood', 'romantic', 'hyped', 'think', 'cry', 'brainoff'] as const) {
-      const deck = engine.buildDeck(req({ who: 'HG', mood }), ctx);
+      const deck = engine.buildDeck(req({ who: ALEX, mood }), ctx);
       for (const c of deck.slice(0, 3)) expect(item(c.itemId).moods[mood] ?? 0, `${mood}: ${item(c.itemId).title}`).toBeGreaterThanOrEqual(0.5);
     }
   });
@@ -179,21 +173,21 @@ describe('mood', () => {
   it('the same title ranks far lower when it does not fit the mood', () => {
     const twin = (id: number, moods: CatalogItem['moods']) => title(id, { moods, keywords: ['heist'], genres: ['crime'] });
     const filler = Array.from({ length: 8 }, (_, k) => title(100 + k, { moods: { gripped: 0.6 }, rating: 7 }));
-    const catalog = madeUp([twin(1, { gripped: 0.9 }), twin(2, { laugh: 0.9 }), ...filler], { HG: [], BG: [] });
-    const deck = engine.buildDeck(req({ who: 'HG', mood: 'gripped' }), makeCtx({ catalog }), { limit: 100 });
+    const catalog = madeUp([twin(1, { gripped: 0.9 }), twin(2, { laugh: 0.9 }), ...filler], { alex: [], sam: [] });
+    const deck = engine.buildDeck(req({ who: ALEX, mood: 'gripped' }), makeCtx({ catalog }), { limit: 100 });
     expect(rank(deck, 'tv-1')).toBe(0);
     expect(rank(deck, 'tv-2')).toBeGreaterThan(rank(deck, 'tv-107'));
   });
 
   it('when plenty of titles fit the mood, ones that do not are left out altogether', () => {
     const ctx = makeCtx({ catalog: syntheticCatalog(600) });
-    const deck = engine.buildDeck(req({ who: 'HG', mood: 'romantic' }), ctx, { limit: 200 });
+    const deck = engine.buildDeck(req({ who: ALEX, mood: 'romantic' }), ctx, { limit: 200 });
     expect(deck.length).toBeGreaterThan(12);
     for (const c of deck) expect(ctx.catalog.items.find((i) => i.id === c.itemId)!.moods.romantic ?? 0).toBeGreaterThanOrEqual(0.2);
   });
 
   it('when only a few fit, the deck is short and on-mood rather than padded with noise', () => {
-    const deck = engine.buildDeck(req({ who: 'BG', mood: 'romantic', novelty: 'new' }), makeCtx(), { limit: 100 });
+    const deck = engine.buildDeck(req({ who: SAM, mood: 'romantic', novelty: 'new' }), makeCtx(), { limit: 100 });
     expect(deck.length).toBeGreaterThanOrEqual(4);
     expect(ids(deck).slice(0, 2)).toContain('tv-91239'); // Bridgerton
     // Nothing with no romance and no neighbouring mood (e.g. South Park) pads the deck.
@@ -213,9 +207,9 @@ describe('taste', () => {
   const related = title(13, { ...base, genres: ['family'], keywords: ['zebra'] });
   const padding = Array.from({ length: 12 }, (_, k) => title(200 + k, { ...base, genres: ['music'], keywords: [`thing ${k}`, 'sitcom'], rating: 6.5 }));
   const fav1WithRelated = { ...fav, related: ['tv-13'] };
-  const catalog = madeUp([fav1WithRelated, fav2, fav3, likeBoth, likeOne, likeNone, related, ...padding], { HG: [fav1WithRelated, fav2, fav3], BG: [fav3] });
+  const catalog = madeUp([fav1WithRelated, fav2, fav3, likeBoth, likeOne, likeNone, related, ...padding], { alex: [fav1WithRelated, fav2, fav3], sam: [fav3] });
   const ctx = makeCtx({ catalog });
-  const deck = engine.buildDeck(req({ who: 'HG', mood: 'laugh', novelty: 'new' }), ctx, { limit: 100 });
+  const deck = engine.buildDeck(req({ who: ALEX, mood: 'laugh', novelty: 'new' }), ctx, { limit: 100 });
 
   it('a title that resembles the favourites beats an otherwise identical one that does not', () => {
     expect(rank(deck, 'tv-11')).toBeLessThan(rank(deck, 'tv-12'));
@@ -235,26 +229,26 @@ describe('taste', () => {
     // Add shared themes and genre to the very same link and the favourite is named.
     const backed = title(14, { ...base, keywords: ['workplace comedy', 'hospital', 'zebra'] });
     const fav1 = { ...fav, related: ['tv-13', 'tv-14'] };
-    const cat = madeUp([fav1, fav2, fav3, related, backed, likeNone, ...padding], { HG: [fav1, fav2, fav3], BG: [fav3] });
-    const d = engine.buildDeck(req({ who: 'HG', mood: 'laugh', novelty: 'new' }), makeCtx({ catalog: cat }), { limit: 100 });
+    const cat = madeUp([fav1, fav2, fav3, related, backed, likeNone, ...padding], { alex: [fav1, fav2, fav3], sam: [fav3] });
+    const d = engine.buildDeck(req({ who: ALEX, mood: 'laugh', novelty: 'new' }), makeCtx({ catalog: cat }), { limit: 100 });
     expect(d.find((c) => c.itemId === 'tv-14')!.reasons[0]).toBe('Because you love Fav One');
     expect(d.find((c) => c.itemId === 'tv-13')!.reasons.join(' | ')).not.toMatch(/Fav/);
     // One loosely shared theme across different genres is not enough either
     // (the real-catalog cases: Scream Queens <- Scrubs via "hospital", Black Mirror <- The Simpsons via "satire").
     const loose = title(15, { ...base, genres: ['mystery'], keywords: ['hospital', 'slasher', 'college', 'mascot'] });
     const fav1b = { ...fav, related: ['tv-15'] };
-    const cat2 = madeUp([fav1b, fav2, fav3, loose, likeNone, ...padding], { HG: [fav1b, fav2, fav3], BG: [fav3] });
-    const d2 = engine.buildDeck(req({ who: 'HG', mood: 'laugh', novelty: 'new' }), makeCtx({ catalog: cat2 }), { limit: 100 });
+    const cat2 = madeUp([fav1b, fav2, fav3, loose, likeNone, ...padding], { alex: [fav1b, fav2, fav3], sam: [fav3] });
+    const d2 = engine.buildDeck(req({ who: ALEX, mood: 'laugh', novelty: 'new' }), makeCtx({ catalog: cat2 }), { limit: 100 });
     expect(d2.find((c) => c.itemId === 'tv-15')!.reasons.join(' | ')).not.toMatch(/Fav/);
   });
   it('Together reasons follow the same rule', () => {
-    const cat = madeUp([fav1WithRelated, fav2, fav3, related, likeBoth, ...padding], { HG: [fav1WithRelated, fav2], BG: [fav1WithRelated, fav3] });
-    const d = engine.buildDeck(req({ who: 'Together', mood: 'laugh', novelty: 'new' }), makeCtx({ catalog: cat }), { limit: 100 });
+    const cat = madeUp([fav1WithRelated, fav2, fav3, related, likeBoth, ...padding], { alex: [fav1WithRelated, fav2], sam: [fav1WithRelated, fav3] });
+    const d = engine.buildDeck(req({ who: BOTH, mood: 'laugh', novelty: 'new' }), makeCtx({ catalog: cat }), { limit: 100 });
     expect(d.find((c) => c.itemId === 'tv-13')!.reasons.join(' | ')).not.toMatch(/Fav/);
     expect(d.find((c) => c.itemId === 'tv-10')!.reasons.join(' | ')).toMatch(/Fav One/);
   });
   it('favourites that are not in the catalog still shape taste (sample catalog: The Devil\'s Plan -> The Traitors)', () => {
-    const d = engine.buildDeck(req({ who: 'HG', mood: 'gripped', time: 60, novelty: 'new' }), makeCtx(), { limit: 100 });
+    const d = engine.buildDeck(req({ who: ALEX, mood: 'gripped', time: 60, novelty: 'new' }), makeCtx(), { limit: 100 });
     const traitors = d.find((c) => c.itemId === 'tv-205715')!;
     expect(traitors.reasons.join(' | ')).toContain("The Devil's Plan");
     expect(rank(d, 'tv-205715')).toBeLessThan(5);
@@ -263,7 +257,7 @@ describe('taste', () => {
     const a = title(1, { rating: 8.6, votes: 5000 });
     const b = title(2, { rating: 6.2, votes: 5000 });
     const c = title(3, { rating: 9.8, votes: 3 }); // three votes: not to be believed
-    const d = engine.buildDeck(req({ who: 'HG', mood: 'gripped' }), makeCtx({ catalog: madeUp([b, c, a], { HG: [], BG: [] }) }));
+    const d = engine.buildDeck(req({ who: ALEX, mood: 'gripped' }), makeCtx({ catalog: madeUp([b, c, a], { alex: [], sam: [] }) }));
     expect(rank(d, 'tv-1')).toBe(0);
     expect(rank(d, 'tv-1')).toBeLessThan(rank(d, 'tv-3'));
     expect(rank(d, 'tv-1')).toBeLessThan(rank(d, 'tv-2'));
@@ -271,8 +265,8 @@ describe('taste', () => {
   it('it is not just a popularity chart: a well-matched modest title beats a mismatched blockbuster', () => {
     const hit = title(20, { ...base, genres: ['family'], keywords: ['dog'], popularity: 5000, votes: 30000, rating: 7.8 });
     const fit = title(21, { ...base, keywords: ['sitcom', 'workplace comedy', 'hospital', 'friendship'], popularity: 5, votes: 300, rating: 7.6 });
-    const cat = madeUp([fav, fav2, hit, fit, ...padding], { HG: [fav, fav2], BG: [] });
-    const d = engine.buildDeck(req({ who: 'HG', mood: 'laugh', novelty: 'new' }), makeCtx({ catalog: cat }), { limit: 100 });
+    const cat = madeUp([fav, fav2, hit, fit, ...padding], { alex: [fav, fav2], sam: [] });
+    const d = engine.buildDeck(req({ who: ALEX, mood: 'laugh', novelty: 'new' }), makeCtx({ catalog: cat }), { limit: 100 });
     expect(rank(d, 'tv-21')).toBeLessThan(rank(d, 'tv-20'));
   });
   it('anime and kids\' shows are held back for someone whose favourites include none', () => {
@@ -280,13 +274,13 @@ describe('taste', () => {
     const anime = title(31, { keywords: ['detective', 'anime'], rating: 8.4 });
     const kids = title(32, { keywords: ['detective'], genres: ['drama', 'kids'], rating: 8.4 });
     const animeFav = title(33, { title: 'Anime Fav', keywords: ['based on manga', 'ninja'] });
-    const fresh = makeCtx({ catalog: madeUp([plain, anime, kids], { HG: [fav3], BG: [animeFav] }) });
-    const hg = engine.buildDeck(req({ who: 'HG', mood: 'gripped' }), fresh);
-    // Despite their higher ratings, the anime and the kids' show rank below the plain drama for HG.
-    expect(ids(hg)[0]).toBe('tv-30');
-    // BG has an anime favourite, so anime competes on its merits for her.
-    const bg = engine.buildDeck(req({ who: 'BG', mood: 'gripped' }), fresh);
-    expect(rank(bg, 'tv-31')).toBe(0);
+    const fresh = makeCtx({ catalog: madeUp([plain, anime, kids], { alex: [fav3], sam: [animeFav] }) });
+    const alex = engine.buildDeck(req({ who: ALEX, mood: 'gripped' }), fresh);
+    // Despite their higher ratings, the anime and the kids' show rank below the plain drama for Alex.
+    expect(ids(alex)[0]).toBe('tv-30');
+    // Sam has an anime favourite, so anime competes on its merits for her.
+    const sam = engine.buildDeck(req({ who: SAM, mood: 'gripped' }), fresh);
+    expect(rank(sam, 'tv-31')).toBe(0);
   });
 });
 
@@ -300,9 +294,9 @@ describe('resemblance cannot carry a badly rated or unproven title to the top', 
   const noMatch = title(14, { genres: ['history'], keywords: ['archive'], moods: { brainoff: 0.9 }, rating: 7.6, votes: 900 });
   const poorNoMatch = title(15, { genres: ['history'], keywords: ['archive'], moods: { brainoff: 0.9 }, rating: 5.2, votes: 900 });
   const filler = Array.from({ length: 10 }, (_, k) => title(100 + k, { genres: ['music'], keywords: [`f${k}`], moods: { brainoff: 0.9 }, rating: 7.4, votes: 900 }));
-  const catalog = madeUp([...favs, poor, unproven, halfMatch, noMatch, poorNoMatch, good, ...filler], { HG: favs, BG: favs });
+  const catalog = madeUp([...favs, poor, unproven, halfMatch, noMatch, poorNoMatch, good, ...filler], { alex: favs, sam: favs });
   const ctx = makeCtx({ catalog });
-  const deck = engine.buildDeck(req({ who: 'BG', mood: 'brainoff', novelty: 'new' }), ctx, { limit: 100 });
+  const deck = engine.buildDeck(req({ who: SAM, mood: 'brainoff', novelty: 'new' }), ctx, { limit: 100 });
 
   it('of two equally close matches, the well-rated one wins clearly', () => {
     expect(rank(deck, 'tv-10')).toBe(0);
@@ -321,8 +315,8 @@ describe('resemblance cannot carry a badly rated or unproven title to the top', 
   });
   it("a person's own favourite is never marked down for its rating", () => {
     const lowFav = title(1, { title: 'Guilty Pleasure', genres: ['reality'], keywords: ['dating show'], moods: { brainoff: 0.9 }, rating: 5.0, votes: 20, attention: 'low', dropIn: true });
-    const cat = madeUp([lowFav, good, ...filler], { HG: [], BG: [lowFav] });
-    const d = engine.buildDeck(req({ who: 'BG', mood: 'brainoff', novelty: 'rewatch' }), makeCtx({ catalog: cat }));
+    const cat = madeUp([lowFav, good, ...filler], { alex: [], sam: [lowFav] });
+    const d = engine.buildDeck(req({ who: SAM, mood: 'brainoff', novelty: 'rewatch' }), makeCtx({ catalog: cat }));
     expect(d[0].itemId).toBe('tv-1');
     expect(d[0].reasons[0]).toBe('One of your favourites');
   });
@@ -340,50 +334,50 @@ describe('one favourite does not speak for the whole person', () => {
   const otherCartoon = title(32, { genres: ['animation', 'comedy'], keywords: ['space pirates', 'robot butler', 'moon base'], runtime: 22, dropIn: true, attention: 'low', moods: { cozy: 0.8 } });
   const items = [...dramas, cartoonFav, ...moreCartoons, cartoonClone, otherCartoon, dramaLike, ...filler];
   // "Mostly dramas" has one cartoon favourite; "cartoon fan" has four.
-  const catalog = madeUp(items, { BG: [...dramas, cartoonFav], HG: [cartoonFav, ...moreCartoons, ...dramas.slice(0, 2)] });
+  const catalog = madeUp(items, { sam: [...dramas, cartoonFav], alex: [cartoonFav, ...moreCartoons, ...dramas.slice(0, 2)] });
   const ctx = makeCtx({ catalog });
   const r = req({ mood: 'cozy', novelty: 'new' });
 
   it('with one cartoon among ten favourites, a clone of that cartoon does not outrank what the other nine point to', () => {
-    const deck = engine.buildDeck({ ...r, who: 'BG' }, ctx, { limit: 100 });
+    const deck = engine.buildDeck({ ...r, who: SAM }, ctx, { limit: 100 });
     expect(rank(deck, 'tv-31')).toBe(0);
     expect(rank(deck, 'tv-31')).toBeLessThan(rank(deck, 'tv-30'));
   });
   it('for someone with four cartoon favourites the same clone comes first', () => {
-    const deck = engine.buildDeck({ ...r, who: 'HG' }, ctx, { limit: 100 });
+    const deck = engine.buildDeck({ ...r, who: ALEX }, ctx, { limit: 100 });
     expect(rank(deck, 'tv-30')).toBe(0);
     expect(rank(deck, 'tv-30')).toBeLessThan(rank(deck, 'tv-31'));
   });
   it('the lone favourite still counts for something: its clone beats an otherwise identical cartoon with nothing in common', () => {
-    const deck = engine.buildDeck({ ...r, who: 'BG' }, ctx, { limit: 100 });
+    const deck = engine.buildDeck({ ...r, who: SAM }, ctx, { limit: 100 });
     expect(rank(deck, 'tv-30')).toBeLessThan(rank(deck, 'tv-32'));
   });
   it('the same clone scores lower for the one-cartoon person than for the cartoon fan', () => {
-    const score = (who: 'HG' | 'BG') => engine.buildDeck({ ...r, who }, ctx, { limit: 100 }).find((c) => c.itemId === 'tv-30')!.score;
-    expect(score('BG')).toBeLessThan(score('HG') - 0.1);
+    const score = (who: Who) => engine.buildDeck({ ...r, who }, ctx, { limit: 100 }).find((c) => c.itemId === 'tv-30')!.score;
+    expect(score(SAM)).toBeLessThan(score(ALEX) - 0.1);
   });
-  it('on the real favourites: BG (one animated favourite of 22) gets less adult animation than HG (four of 14)', () => {
+  it('on the real favourites: Sam (one animated favourite of 22) gets less adult animation than Alex (four of 14)', () => {
     const real = makeCtx();
     // v2: counted over a rewatch deck and a new deck (was one 'either' deck, which used to deal all
     // their animated favourites near the top and now deals about one seen title in ten).
-    const animated = (who: 'HG' | 'BG') =>
+    const animated = (who: Who) =>
       (['rewatch', 'new'] as const)
         .flatMap((novelty) => engine.buildDeck(req({ who, mood: 'laugh', viewing: 'background', time: 20, novelty }), real, { limit: 6 }))
         .filter((c) => real.catalog.items.find((i) => i.id === c.itemId)!.genres.includes('animation')).length;
-    expect(animated('BG')).toBeLessThan(animated('HG'));
-    // Bob's Burgers (animated) vs Parks and Recreation (live-action sitcom): BG's sitcom favourites should win out.
-    const bg = engine.buildDeck(req({ who: 'BG', mood: 'laugh', viewing: 'background', time: 20, novelty: 'new' }), real, { limit: 100 });
-    expect(rank(bg, 'tv-8592')).toBeLessThan(rank(bg, 'tv-32726'));
+    expect(animated(SAM)).toBeLessThan(animated(ALEX));
+    // Bob's Burgers (animated) vs Parks and Recreation (live-action sitcom): Sam's sitcom favourites should win out.
+    const sam = engine.buildDeck(req({ who: SAM, mood: 'laugh', viewing: 'background', time: 20, novelty: 'new' }), real, { limit: 100 });
+    expect(rank(sam, 'tv-8592')).toBeLessThan(rank(sam, 'tv-32726'));
   });
 });
 
 describe('genre craving', () => {
   it('every title with the craved genre comes before any title without it', () => {
     for (const { who, genre, mood } of [
-      { who: 'HG', genre: 'animation', mood: 'laugh' },
-      { who: 'Together', genre: 'romance', mood: 'cozy' },
-      { who: 'BG', genre: 'reality', mood: 'brainoff' },
-      { who: 'HG', genre: 'scifi', mood: 'gripped' },
+      { who: ALEX, genre: 'animation', mood: 'laugh' },
+      { who: BOTH, genre: 'romance', mood: 'cozy' },
+      { who: SAM, genre: 'reality', mood: 'brainoff' },
+      { who: ALEX, genre: 'scifi', mood: 'gripped' },
     ] as const) {
       const deck = engine.buildDeck(req({ who, genre, mood }), makeCtx(), { limit: 100, seed: 2 });
       const has = deck.map((c) => item(c.itemId).genres.includes(genre));
@@ -394,55 +388,55 @@ describe('genre craving', () => {
   });
   it('the craving changes the deck and is given as a reason', () => {
     const ctx = makeCtx();
-    const without = engine.buildDeck(req({ who: 'HG', mood: 'laugh', time: 120 }), ctx);
-    const withCraving = engine.buildDeck(req({ who: 'HG', mood: 'laugh', time: 120, genre: 'animation' }), ctx);
+    const without = engine.buildDeck(req({ who: ALEX, mood: 'laugh', time: 120 }), ctx);
+    const withCraving = engine.buildDeck(req({ who: ALEX, mood: 'laugh', time: 120, genre: 'animation' }), ctx);
     expect(ids(withCraving)).not.toEqual(ids(without));
     expect(withCraving[0].reasons).toContain('Animation, like you asked');
   });
   it('with a big catalog a craving deck is entirely that genre', () => {
     const ctx = makeCtx({ catalog: syntheticCatalog(800) });
-    const deck = engine.buildDeck(req({ who: 'Together', mood: 'laugh', genre: 'animation' }), ctx);
+    const deck = engine.buildDeck(req({ who: BOTH, mood: 'laugh', genre: 'animation' }), ctx);
     expect(deck).toHaveLength(30);
     for (const c of deck) expect(ctx.catalog.items.find((i) => i.id === c.itemId)!.genres).toContain('animation');
   });
 });
 
 describe('Together: the pick has to suit both', () => {
-  const hgFavs = [1, 2, 3].map((k) => title(k, { title: `HG Fav ${k}`, genres: ['western'], keywords: ['gunslinger', 'frontier', 'outlaw'] }));
-  const bgFavs = [4, 5, 6].map((k) => title(k, { title: `BG Fav ${k}`, genres: ['music'], keywords: ['ballet', 'dance', 'audition'] }));
-  const hgOnly = title(10, { genres: ['western'], keywords: ['gunslinger', 'frontier', 'outlaw'] }); // HG would love it, nothing for BG
-  const bgOnly = title(11, { genres: ['music'], keywords: ['ballet', 'dance', 'audition'] });
+  const alexFavs = [1, 2, 3].map((k) => title(k, { title: `Alex Fav ${k}`, genres: ['western'], keywords: ['gunslinger', 'frontier', 'outlaw'] }));
+  const samFavs = [4, 5, 6].map((k) => title(k, { title: `Sam Fav ${k}`, genres: ['music'], keywords: ['ballet', 'dance', 'audition'] }));
+  const alexOnly = title(10, { genres: ['western'], keywords: ['gunslinger', 'frontier', 'outlaw'] }); // Alex would love it, nothing for Sam
+  const samOnly = title(11, { genres: ['music'], keywords: ['ballet', 'dance', 'audition'] });
   const both = title(12, { genres: ['western', 'music'], keywords: ['gunslinger', 'frontier', 'dance', 'ballet'] }); // decent for each
   const neither = title(13, { genres: ['history'], keywords: ['archive'] });
-  const catalog = madeUp([hgOnly, bgOnly, both, neither], { HG: hgFavs, BG: bgFavs });
+  const catalog = madeUp([alexOnly, samOnly, both, neither], { alex: alexFavs, sam: samFavs });
   const ctx = makeCtx({ catalog });
   const r = req({ mood: 'gripped' });
 
   it('alone, each person gets their own favourite kind of thing first', () => {
-    expect(ids(engine.buildDeck({ ...r, who: 'HG' }, ctx))[0]).toBe('tv-10');
-    expect(ids(engine.buildDeck({ ...r, who: 'BG' }, ctx))[0]).toBe('tv-11');
+    expect(ids(engine.buildDeck({ ...r, who: ALEX }, ctx))[0]).toBe('tv-10');
+    expect(ids(engine.buildDeck({ ...r, who: SAM }, ctx))[0]).toBe('tv-11');
   });
   it('together, the title that works for both beats the ones only one of them would love', () => {
-    const deck = engine.buildDeck({ ...r, who: 'Together' }, ctx);
+    const deck = engine.buildDeck({ ...r, who: BOTH }, ctx);
     expect(ids(deck)[0]).toBe('tv-12');
     expect(rank(deck, 'tv-12')).toBeLessThan(rank(deck, 'tv-10'));
     expect(rank(deck, 'tv-12')).toBeLessThan(rank(deck, 'tv-11'));
   });
   it('the blend leans on the less keen person, not the average', () => {
-    // Give BG a strong dislike of westerns: HG's favourite kind must now sink below even the neutral title.
+    // Give Sam a strong dislike of westerns: Alex's favourite kind must now sink below even the neutral title.
     const soured = makeCtx({ catalog });
-    soured.state.profiles.BG = engine.correctTaste(soured.state.profiles.BG, 'genre:western', 'less');
-    const deck = engine.buildDeck({ ...r, who: 'Together' }, soured);
+    soured.state.profiles.sam = engine.correctTaste(soured.state.profiles.sam, 'genre:western', 'less');
+    const deck = engine.buildDeck({ ...r, who: BOTH }, soured);
     expect(rank(deck, 'tv-10')).toBeGreaterThan(rank(deck, 'tv-13'));
-    // ...while HG alone is unaffected by BG's dislike.
-    expect(ids(engine.buildDeck({ ...r, who: 'HG' }, soured))[0]).toBe('tv-10');
+    // ...while Alex alone is unaffected by Sam's dislike.
+    expect(ids(engine.buildDeck({ ...r, who: ALEX }, soured))[0]).toBe('tv-10');
   });
   it('Together reasons say whose favourite a title resembles', () => {
-    const deck = engine.buildDeck({ ...r, who: 'Together' }, ctx);
+    const deck = engine.buildDeck({ ...r, who: BOTH }, ctx);
     const reasons = deck.find((c) => c.itemId === 'tv-12')!.reasons.join(' | ');
-    expect(reasons).toMatch(/Because HG loves HG Fav/);
-    expect(reasons).toMatch(/Because BG loves BG Fav/);
-    const shared = engine.buildDeck(req({ who: 'Together', mood: 'laugh', novelty: 'new' }), makeCtx(), { limit: 100 });
+    expect(reasons).toMatch(/Because Alex loves Alex Fav/);
+    expect(reasons).toMatch(/Because Sam loves Sam Fav/);
+    const shared = engine.buildDeck(req({ who: BOTH, mood: 'laugh', novelty: 'new' }), makeCtx(), { limit: 100 });
     expect(shared.find((c) => c.itemId === 'tv-32726')!.reasons[0]).toBe('Because you both love Family Guy'); // Bob's Burgers
   });
 });
@@ -453,34 +447,34 @@ describe('Together: the pick has to suit both', () => {
 describe('new vs seen under "either"', () => {
   it('in a non-comfort mood, new titles lead and a rewatch only appears a few cards in', () => {
     const ctx = makeCtx();
-    const deck = engine.buildDeck(req({ who: 'HG', mood: 'gripped', novelty: 'either' }), ctx, { limit: 100 });
-    expect(engine.hasSeen('HG', deck[0].itemId, ctx)).toBe(false);
-    expect(engine.hasSeen('HG', deck[1].itemId, ctx)).toBe(false);
-    const seenInTop = deck.slice(0, 10).filter((c) => engine.hasSeen('HG', c.itemId, ctx)).length;
+    const deck = engine.buildDeck(req({ who: ALEX, mood: 'gripped', novelty: 'either' }), ctx, { limit: 100 });
+    expect(engine.hasSeen('alex', deck[0].itemId, ctx)).toBe(false);
+    expect(engine.hasSeen('alex', deck[1].itemId, ctx)).toBe(false);
+    const seenInTop = deck.slice(0, 10).filter((c) => engine.hasSeen('alex', c.itemId, ctx)).length;
     expect(seenInTop).toBeLessThanOrEqual(1);
   });
   it('in a comfort mood, one favourite is dealt among the first ten cards — one, not a handful', () => {
     const ctx = makeCtx();
-    const deck = engine.buildDeck(req({ who: 'HG', mood: 'cozy', viewing: 'background', time: 20, novelty: 'either' }), ctx);
-    const seen = deck.slice(0, 10).filter((c) => engine.hasSeen('HG', c.itemId, ctx));
+    const deck = engine.buildDeck(req({ who: ALEX, mood: 'cozy', viewing: 'background', time: 20, novelty: 'either' }), ctx);
+    const seen = deck.slice(0, 10).filter((c) => engine.hasSeen('alex', c.itemId, ctx));
     expect(seen).toHaveLength(1);
-    expect(ctx.state.profiles.HG.favorites).toContain(seen[0].itemId);
+    expect(ctx.state.profiles.alex.favorites.map((f) => f.id)).toContain(seen[0].itemId);
   });
   it('marking a title seen takes it out of the run of new titles: at best it becomes the one-in-ten rewatch', () => {
     const id = 'tv-76331'; // Succession
-    const r = req({ who: 'HG', mood: 'gripped' });
+    const r = req({ who: ALEX, mood: 'gripped' });
     const unseen = engine.buildDeck(r, makeCtx(), { limit: 100 });
-    const seen = engine.buildDeck(r, makeCtx({ seen: { HG: [id] } }), { limit: 100 });
+    const seen = engine.buildDeck(r, makeCtx({ seen: { alex: [id] } }), { limit: 100 });
     expect(rank(unseen, id)).toBeLessThan(10);
     // Seen: either not dealt at all, or dealt in a rewatch slot (never in the first two cards).
     expect(rank(seen, id)).toBeGreaterThan(rank(unseen, id));
     expect(rank(seen, id)).toBeGreaterThanOrEqual(2);
   });
   it('for a rewatch, favourites come first', () => {
-    const ctx = makeCtx({ seen: { HG: ['tv-8592', 'tv-48891', 'tv-125935'] } });
-    const deck = engine.buildDeck(req({ who: 'HG', mood: 'laugh', novelty: 'rewatch', time: 20 }), ctx);
-    expect(ctx.state.profiles.HG.favorites).toContain(deck[0].itemId);
-    expect(ctx.state.profiles.HG.favorites).toContain(deck[1].itemId);
+    const ctx = makeCtx({ seen: { alex: ['tv-8592', 'tv-48891', 'tv-125935'] } });
+    const deck = engine.buildDeck(req({ who: ALEX, mood: 'laugh', novelty: 'rewatch', time: 20 }), ctx);
+    expect(ctx.state.profiles.alex.favorites.map((f) => f.id)).toContain(deck[0].itemId);
+    expect(ctx.state.profiles.alex.favorites.map((f) => f.id)).toContain(deck[1].itemId);
   });
 });
 
@@ -488,21 +482,21 @@ describe('time and viewing fit', () => {
   it('with 2+ hours, a film beats an otherwise identical 22-minute sitcom; with 20 minutes only the sitcom fits', () => {
     const film = title(1, { id: 'movie-1', kind: 'movie', runtime: 105, genres: ['comedy'], keywords: ['wedding'], moods: { laugh: 0.9 }, attention: 'low', seasons: undefined });
     const sitcom = title(2, { runtime: 22, genres: ['comedy'], keywords: ['wedding'], moods: { laugh: 0.9 }, attention: 'low', dropIn: true });
-    const ctx = makeCtx({ catalog: madeUp([sitcom, film], { HG: [], BG: [] }) });
-    expect(ids(engine.buildDeck(req({ who: 'HG', time: 120 }), ctx))).toEqual(['movie-1', 'tv-2']);
-    expect(ids(engine.buildDeck(req({ who: 'HG', time: 20 }), ctx))).toEqual(['tv-2']);
+    const ctx = makeCtx({ catalog: madeUp([sitcom, film], { alex: [], sam: [] }) });
+    expect(ids(engine.buildDeck(req({ who: ALEX, time: 120 }), ctx))).toEqual(['movie-1', 'tv-2']);
+    expect(ids(engine.buildDeck(req({ who: ALEX, time: 20 }), ctx))).toEqual(['tv-2']);
   });
   it('with an hour, an hour-long episode beats an otherwise identical 22-minute one', () => {
     const long = title(1, { runtime: 55 });
     const short = title(2, { runtime: 22 });
-    const ctx = makeCtx({ catalog: madeUp([short, long], { HG: [], BG: [] }) });
-    expect(ids(engine.buildDeck(req({ who: 'HG', mood: 'gripped', time: 60 }), ctx))).toEqual(['tv-1', 'tv-2']);
+    const ctx = makeCtx({ catalog: madeUp([short, long], { alex: [], sam: [] }) });
+    expect(ids(engine.buildDeck(req({ who: ALEX, mood: 'gripped', time: 60 }), ctx))).toEqual(['tv-1', 'tv-2']);
   });
   it('for background viewing a drop-in show beats an otherwise identical one you must follow in order', () => {
     const drop = title(1, { attention: 'low', dropIn: true });
     const serial = title(2, { attention: 'low', dropIn: false });
-    const ctx = makeCtx({ catalog: madeUp([serial, drop], { HG: [], BG: [] }) });
-    const deck = engine.buildDeck(req({ who: 'HG', mood: 'gripped', viewing: 'background' }), ctx);
+    const ctx = makeCtx({ catalog: madeUp([serial, drop], { alex: [], sam: [] }) });
+    const deck = engine.buildDeck(req({ who: ALEX, mood: 'gripped', viewing: 'background' }), ctx);
     expect(ids(deck)).toEqual(['tv-1', 'tv-2']);
     expect(deck[0].reasons).toContain('Easy to drop into');
   });
@@ -515,8 +509,8 @@ describe('variety', () => {
     const others = (['music', 'history', 'war', 'documentary', 'fantasy', 'romance'] as const).map((g, k) =>
       title(50 + k, { genres: [g], keywords: [`k${k}`], rating: 7.7, providers: [337] }),
     );
-    const ctx = makeCtx({ catalog: madeUp([...clones, ...others], { HG: [], BG: [] }) });
-    const deck = engine.buildDeck(req({ who: 'HG', mood: 'gripped' }), ctx);
+    const ctx = makeCtx({ catalog: madeUp([...clones, ...others], { alex: [], sam: [] }) });
+    const deck = engine.buildDeck(req({ who: ALEX, mood: 'gripped' }), ctx);
     const firstTen = deck.slice(0, 10).map((c) => ctx.catalog.items.find((i) => i.id === c.itemId)!.genres[0]);
     expect(new Set(firstTen).size).toBeGreaterThanOrEqual(4);
     expect(firstTen[0]).toBe('western'); // the best title still leads
@@ -525,30 +519,30 @@ describe('variety', () => {
 
 describe('the New feed (rankNewArrivals)', () => {
   it('keeps arrivals that are in the catalog and on our plans, with the arrival attached', () => {
-    const cards = engine.rankNewArrivals(FIXTURE_NEW_ARRIVALS, 'HG', makeCtx());
+    const cards = engine.rankNewArrivals(FIXTURE_NEW_ARRIVALS, ALEX, makeCtx());
     expect(cards.map((c) => c.itemId).sort()).toEqual(['movie-346648', 'movie-419430', 'movie-661374', 'tv-125935', 'tv-136315', 'tv-205715'].sort());
     for (const c of cards) expect(c.arrival.itemId).toBe(c.itemId);
     for (let k = 1; k < cards.length; k++) expect(cards[k].score).toBeLessThanOrEqual(cards[k - 1].score);
   });
   it('ignores arrivals that are not in the catalog', () => {
     const arrivals = { ...FIXTURE_NEW_ARRIVALS, entries: [{ itemId: 'tv-999999', type: 'title' as const, providers: [8], date: '2026-10-09' }, ...FIXTURE_NEW_ARRIVALS.entries] };
-    expect(engine.rankNewArrivals(arrivals, 'HG', makeCtx()).map((c) => c.itemId)).not.toContain('tv-999999');
+    expect(engine.rankNewArrivals(arrivals, ALEX, makeCtx()).map((c) => c.itemId)).not.toContain('tv-999999');
   });
   it('drops a title a watcher has already seen, unless it is a new season', () => {
-    const ctx = makeCtx({ seen: { HG: ['movie-661374', 'tv-125935'] } });
-    const hg = engine.rankNewArrivals(FIXTURE_NEW_ARRIVALS, 'HG', ctx).map((c) => c.itemId);
-    expect(hg).not.toContain('movie-661374'); // a film he has seen
-    expect(hg).toContain('tv-125935'); // new season of a show he watches
-    expect(engine.rankNewArrivals(FIXTURE_NEW_ARRIVALS, 'Together', ctx).map((c) => c.itemId)).not.toContain('movie-661374');
-    expect(engine.rankNewArrivals(FIXTURE_NEW_ARRIVALS, 'BG', ctx).map((c) => c.itemId)).toContain('movie-661374');
-    // The Traitors is a BG favourite (so seen); its new season stays in her feed.
-    expect(engine.rankNewArrivals(FIXTURE_NEW_ARRIVALS, 'BG', ctx).map((c) => c.itemId)).toContain('tv-205715');
+    const ctx = makeCtx({ seen: { alex: ['movie-661374', 'tv-125935'] } });
+    const alex = engine.rankNewArrivals(FIXTURE_NEW_ARRIVALS, ALEX, ctx).map((c) => c.itemId);
+    expect(alex).not.toContain('movie-661374'); // a film he has seen
+    expect(alex).toContain('tv-125935'); // new season of a show he watches
+    expect(engine.rankNewArrivals(FIXTURE_NEW_ARRIVALS, BOTH, ctx).map((c) => c.itemId)).not.toContain('movie-661374');
+    expect(engine.rankNewArrivals(FIXTURE_NEW_ARRIVALS, SAM, ctx).map((c) => c.itemId)).toContain('movie-661374');
+    // The Traitors is a Sam favourite (so seen); its new season stays in her feed.
+    expect(engine.rankNewArrivals(FIXTURE_NEW_ARRIVALS, SAM, ctx).map((c) => c.itemId)).toContain('tv-205715');
   });
   it('ranks by taste: a new season of a favourite tops the feed', () => {
-    expect(engine.rankNewArrivals(FIXTURE_NEW_ARRIVALS, 'BG', makeCtx())[0].itemId).toBe('tv-205715');
+    expect(engine.rankNewArrivals(FIXTURE_NEW_ARRIVALS, SAM, makeCtx())[0].itemId).toBe('tv-205715');
   });
   it('uses the same "what to watch" logic with no time limit, and does not point a new season at an old episode', () => {
-    const cards = engine.rankNewArrivals(FIXTURE_NEW_ARRIVALS, 'HG', makeCtx());
+    const cards = engine.rankNewArrivals(FIXTURE_NEW_ARRIVALS, ALEX, makeCtx());
     expect(cards.find((c) => c.itemId === 'movie-346648')!.pick).toEqual({ type: 'movie' });
     expect(cards.find((c) => c.itemId === 'tv-125935')!.pick).toEqual({ type: 'any-episode' });
     expect(cards.find((c) => c.itemId === 'tv-136315')!.pick).toEqual({ type: 'series-start' });
@@ -558,23 +552,23 @@ describe('the New feed (rankNewArrivals)', () => {
 
 describe('the first-run grid (onboardingTitles)', () => {
   it('returns the requested number of distinct, on-plan titles, the same every time', () => {
-    const a = engine.onboardingTitles(FIXTURE_CATALOG, DEFAULT_PLANS, 20);
+    const a = engine.onboardingTitles(FIXTURE_CATALOG, PLANS, 20);
     expect(a).toHaveLength(20);
     expect(new Set(a.map((i) => i.id)).size).toBe(20);
-    for (const i of a) expect(engine.chooseService(i, DEFAULT_PLANS)).not.toBeNull();
-    expect(engine.onboardingTitles(FIXTURE_CATALOG, DEFAULT_PLANS, 20).map((i) => i.id)).toEqual(a.map((i) => i.id));
+    for (const i of a) expect(engine.chooseService(i, PLANS)).not.toBeNull();
+    expect(engine.onboardingTitles(FIXTURE_CATALOG, PLANS, 20).map((i) => i.id)).toEqual(a.map((i) => i.id));
   });
   it('leads with widely-known titles and mixes films with series and several genres', () => {
-    const a = engine.onboardingTitles(FIXTURE_CATALOG, DEFAULT_PLANS, 16);
+    const a = engine.onboardingTitles(FIXTURE_CATALOG, PLANS, 16);
     expect(a.slice(0, 6).map((i) => i.title)).toContain('Game of Thrones');
     expect(a.some((i) => i.kind === 'movie')).toBe(true);
     expect(a.some((i) => i.kind === 'tv')).toBe(true);
     expect(new Set(a.map((i) => i.genres[0])).size).toBeGreaterThanOrEqual(5);
   });
   it('does not leave titles out for dealbreakers — it only asks "have you seen this?"', () => {
-    const all = engine.onboardingTitles(FIXTURE_CATALOG, DEFAULT_PLANS, 500);
+    const all = engine.onboardingTitles(FIXTURE_CATALOG, PLANS, 500);
     expect(all.map((i) => i.id)).toContain('movie-419430'); // Get Out
-    expect(all).toHaveLength(FIXTURE_CATALOG.items.filter((i) => engine.chooseService(i, DEFAULT_PLANS)).length);
+    expect(all).toHaveLength(FIXTURE_CATALOG.items.filter((i) => engine.chooseService(i, PLANS)).length);
   });
 });
 
@@ -582,12 +576,12 @@ describe('speed on a phone-sized catalog (about 3,000 titles)', () => {
   it('builds a deck in well under 100 ms once warm, for every audience', () => {
     const catalog = syntheticCatalog(3000);
     expect(catalog.items).toHaveLength(3000);
-    const ctx = makeCtx({ catalog, seen: { HG: catalog.items.slice(100, 400).map((i) => i.id), BG: catalog.items.slice(300, 700).map((i) => i.id) } });
+    const ctx = makeCtx({ catalog, seen: { alex: catalog.items.slice(100, 400).map((i) => i.id), sam: catalog.items.slice(300, 700).map((i) => i.id) } });
     const requests = [
-      req({ who: 'HG', mood: 'laugh', viewing: 'background', time: 20 }),
-      req({ who: 'BG', mood: 'gripped', time: 60, novelty: 'new' }),
-      req({ who: 'Together', mood: 'cozy', viewing: 'eating', time: 45 }),
-      req({ who: 'Together', mood: 'hyped', genre: 'action', novelty: 'new' }),
+      req({ who: ALEX, mood: 'laugh', viewing: 'background', time: 20 }),
+      req({ who: SAM, mood: 'gripped', time: 60, novelty: 'new' }),
+      req({ who: BOTH, mood: 'cozy', viewing: 'eating', time: 45 }),
+      req({ who: BOTH, mood: 'hyped', genre: 'action', novelty: 'new' }),
     ];
     const cold0 = performance.now();
     engine.buildDeck(requests[2], ctx);
@@ -615,10 +609,10 @@ describe('speed on a phone-sized catalog (about 3,000 titles)', () => {
   it('a swipe (which changes the learned weights) does not force the expensive part to be redone', () => {
     const catalog = syntheticCatalog(3000);
     const ctx = makeCtx({ catalog });
-    engine.buildDeck(req({ who: 'HG' }), ctx);
-    ctx.state.profiles.HG = engine.learnFromSwipe(ctx.state.profiles.HG, catalog.items[5], 'yes', catalog);
+    engine.buildDeck(req({ who: ALEX }), ctx);
+    ctx.state.profiles.alex = engine.learnFromSwipe(ctx.state.profiles.alex, catalog.items[5], 'yes', catalog);
     const t0 = performance.now();
-    engine.buildDeck(req({ who: 'HG' }), ctx);
+    engine.buildDeck(req({ who: ALEX }), ctx);
     expect(performance.now() - t0).toBeLessThan(150);
   });
 });

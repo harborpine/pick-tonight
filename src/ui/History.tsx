@@ -1,8 +1,8 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
-import type { PersonId, SeenEntry, TitleIndex, TitleIndexEntry } from '../contracts';
+import type { MemberId, SeenEntry, TitleIndex, TitleIndexEntry } from '../contracts';
 import { Header, Icon, Poster, Segmented, Sheet } from './components';
 import { useApp } from './context';
-import { formatCount, formatDate, otherPerson, seenSourceNote, sortSeen } from './helpers';
+import { formatCount, formatDate, nameOf, seenSourceNote, sortSeen } from './helpers';
 
 const PAGE = 50;
 
@@ -17,11 +17,10 @@ interface Row {
 
 /** The History tab: what a person has WATCHED (state.seen). Right-swipes and matches never appear here. */
 export function History() {
-  const { state, me, itemById, titleOf, services, toast } = useApp();
+  const { state, me, members, isSolo, itemById, titleOf, services, toast } = useApp();
   const { sync } = services;
-  const other = otherPerson(me);
-  const [whoSel, setWhoSel] = useState<'me' | 'partner'>('me');
-  const person: PersonId = whoSel === 'me' ? me : other;
+  const [whoSel, setWhoSel] = useState<MemberId>(me);
+  const person: MemberId = state.members[whoSel] ? whoSel : me;
   const [query, setQuery] = useState('');
   const deferred = useDeferredValue(query);
   const [shown, setShown] = useState(PAGE);
@@ -68,15 +67,14 @@ export function History() {
   return (
     <div className="screen with-tabs scroll" data-testid="history">
       <Header title="History" subtitle="What you have watched" />
-      <Segmented
-        testPrefix="history-person"
-        value={whoSel}
-        onChange={setWhoSel}
-        options={[
-          { value: 'me', label: `Me (${me})` },
-          { value: 'partner', label: other },
-        ]}
-      />
+      {!isSolo && (
+        <Segmented
+          testPrefix="history-person"
+          value={person}
+          onChange={setWhoSel}
+          options={members.map((m) => ({ value: m.id, label: m.id === me ? `${m.name} (me)` : m.name, memberId: m.id }))}
+        />
+      )}
       <button type="button" className="btn btn-ghost btn-block add-watched" data-testid="history-add" onClick={() => setAdding(true)}>
         {Icon.plus}
         <span>Add something I&rsquo;ve watched</span>
@@ -86,7 +84,7 @@ export function History() {
         <input
           type="search"
           inputMode="search"
-          placeholder={whoSel === 'me' ? 'Search your history' : `Search ${other}’s history`}
+          placeholder={person === me ? 'Search your history' : `Search ${nameOf(state.members, person)}’s history`}
           aria-label="Search history"
           data-testid="history-search"
           value={query}
@@ -99,7 +97,7 @@ export function History() {
 
       {all.length === 0 ? (
         <p className="empty-note" data-testid="history-empty">
-          Nothing here yet. Tap &ldquo;I watched this&rdquo; on a match, add a title above, or import a watch history from the profile page in Us.
+          Nothing here yet. This fills up when you tap &ldquo;I watched this&rdquo; on a match, add a title with the button above, or import a watch history from your page in Us.
         </p>
       ) : rows.length === 0 ? (
         <p className="empty-note" data-testid="history-no-results">
@@ -155,7 +153,7 @@ export function History() {
 // "Add something I've watched"
 // ---------------------------------------------------------------------------
 
-function AddSheet({ person, onClose }: { person: PersonId; onClose: () => void }) {
+function AddSheet({ person, onClose }: { person: MemberId; onClose: () => void }) {
   const { services, state, toast, me } = useApp();
   const { engine, sync } = services;
   const [text, setText] = useState('');
@@ -203,7 +201,7 @@ function AddSheet({ person, onClose }: { person: PersonId; onClose: () => void }
     try {
       await sync.markWatched(person, [{ itemId: e.id, source: 'manual', snapshot: { title: e.title, year: e.year, poster: e.poster ?? null } }]);
       setAdded((a) => new Set(a).add(e.id));
-      toast(person === me ? 'Added to your History' : `Added to ${person}’s History`);
+      toast(person === me ? 'Added to your History' : `Added to ${nameOf(state.members, person)}’s History`);
     } catch {
       toast('Could not save that. Please try again.');
     }
@@ -211,7 +209,7 @@ function AddSheet({ person, onClose }: { person: PersonId; onClose: () => void }
 
   const typed = query.trim().length >= 2;
   return (
-    <Sheet testId="history-add-sheet" title={person === me ? 'Add something I’ve watched' : `Add something ${person} has watched`} onClose={onClose}>
+    <Sheet testId="history-add-sheet" title={person === me ? 'Add something I’ve watched' : `Add something ${nameOf(state.members, person)} has watched`} onClose={onClose}>
       <div className="search-box">
         {Icon.search}
         <input

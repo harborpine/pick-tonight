@@ -172,3 +172,37 @@ export function phraseForKey(key: string): string | null {
   if (kind === 'trait') return TRAIT_PHRASES[name] ?? null;
   return null;
 }
+
+// ---------------------------------------------------------------------------
+// People. Reasons and follow-ups talk to whoever is watching: a person alone is
+// "you"; a group is addressed together ("you both", "all three of you") or by
+// NAME when something is true of only some of them. Member ids are never shown.
+// ---------------------------------------------------------------------------
+
+const COUNT_WORDS: Record<number, string> = { 3: 'three', 4: 'four', 5: 'five', 6: 'six' };
+const countWord = (n: number): string => COUNT_WORDS[n] ?? String(n);
+
+/** "Alex" / "Alex and Sam" / "Alex, Sam and Kit". */
+export function listNames(names: string[]): string {
+  if (names.length <= 1) return names[0] ?? 'someone';
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+}
+
+/** Subject for something true of the WHOLE audience of n: "you" / "you both" / "all three of you". */
+export function allOfYou(n: number): string {
+  return n <= 1 ? 'you' : n === 2 ? 'you both' : `all ${countWord(n)} of you`;
+}
+
+/** The same after a preposition: "you" / "both of you" / "all three of you". */
+export function bothOfYou(n: number): string {
+  return n <= 1 ? 'you' : n === 2 ? 'both of you' : `all ${countWord(n)} of you`;
+}
+
+/** Subject for something true of SOME of a group, by name: "Alex" / "Alex and Sam both" / "Alex, Sam and Kit all". */
+export function namedSubject(names: string[]): string {
+  if (names.length <= 1) return names[0] ?? 'someone';
+  return `${listNames(names)} ${names.length === 2 ? 'both' : 'all'}`;
+}
+
+/** "Sam's" (also after a name ending in s: "Chris's"). */
+export const possessive = (name: string): string => `${name}'s`;

@@ -6,7 +6,7 @@
  *     Computed for the whole catalog once per favourites list and cached.
  *  2. Learned weights and manual corrections from the profile, applied on top.
  */
-import type { Catalog, CatalogItem, GenreId, Profile, TasteWeights, TitleCore } from '../contracts';
+import type { Catalog, CatalogItem, FavoriteTitle, GenreId, Profile, TasteWeights, TitleKind } from '../contracts';
 import { getIndex, nichesOf, type CatalogIndex, type ItemInfo, type NicheId } from './catalogIndex';
 import { clamp, SmallCache } from './util';
 
@@ -22,6 +22,8 @@ const SIM_FLOOR = 0.14;
 /** The best match counts fully, then each further favourite it resembles adds less. */
 const MULTI_WEIGHTS = [1, 0.6, 0.4, 0.25];
 const MULTI_NORM = 1.55;
+/** Someone with a single favourite can only ever resemble one: don't mark them down for having no second match. */
+const MULTI_NORM_SINGLE = 1;
 /** A person's own favourite is, by definition, to their taste. */
 export const OWN_FAVOURITE_TASTE = 0.92;
 
@@ -29,11 +31,16 @@ export const OWN_FAVOURITE_TASTE = 0.92;
  * SUPPORT: one favourite should not speak for the whole person. A feature
  * (keyword or genre) shared with a favourite counts in full only when several
  * favourites have it; a feature only ONE favourite has counts for less.
- * (BG's single animated favourite among twenty-two must not fill her decks
- * with adult animation, while HG's four animated favourites rightly do.)
- * Only applied once there are enough favourites for "only one" to mean something.
+ * (A single animated favourite among twenty-two must not fill that person's
+ * decks with adult animation, while four animated favourites rightly do.)
+ *
+ * That only makes sense for a long list. Someone who has picked three
+ * favourites chose each one deliberately and every one of them DOES speak for
+ * them, so the mark-down fades in with the length of the list: none at
+ * SUPPORT_FROM favourites or fewer, in full from SUPPORT_FULL.
  */
-const SUPPORT_MIN_FAVS = 6;
+const SUPPORT_FROM = 3;
+const SUPPORT_FULL = 8;
 /** Keyword shared with 1 / 2 / 3+ favourites. */
 const KW_SUPPORT = [0.65, 0.85, 1];
 /** Genre shared with 1 / 2 / 3+ favourites. */
@@ -52,6 +59,8 @@ const FORMAT_SUPPORT = [0.5, 0.6, 0.85];
  * bare "people also watched" link from the catalog is too noisy to say out loud.
  */
 const NAME_MIN_EVIDENCE = 0.7;
+/** In-catalog favourites needed before the "general shape" of what someone loves counts in full. */
+const SHAPE_FULL_FAVS = 8;
 const NAME_KEYWORDS_ALONE = 0.6;
 
 export interface FavMatch {
@@ -62,14 +71,27 @@ export interface FavMatch {
 }
 
 interface Support {
-  on: boolean;
+  /** 0 (a short list: every favourite counts in full) .. 1 (a long one: full mark-down for lone features). */
+  strength: number;
   kwCount: Map<string, number>;
   genreCount: Map<GenreId, number>;
 }
 const step = (table: number[], count: number) => table[Math.min(table.length, Math.max(1, count)) - 1];
+/** A mark-down factor (0..1) applied only as far as the list is long enough for it to mean something. */
+const damp = (factor: number, support: Support) => 1 - support.strength * (1 - factor);
+
+/** What we know about one favourite: the catalog's data when the title is in the catalog, else what the favourite carries. */
+export interface FavCore {
+  id: string;
+  kind: TitleKind;
+  title: string;
+  genres: GenreId[];
+  keywords: string[];
+  related: string[];
+}
 
 interface FavInfo {
-  core: TitleCore;
+  core: FavCore;
   kw: Map<string, number>;
   kwWeightSum: number;
   genres: Set<GenreId>;
@@ -81,8 +103,8 @@ interface FavInfo {
 
 export interface FavModel {
   favIds: Set<string>;
-  /** Favourites we could resolve to a known title. */
-  favs: TitleCore[];
+  /** The favourites, one entry per title. */
+  favs: FavCore[];
   /** 0..1 resemblance to the favourites, per catalog item (by ItemInfo.idx). */
   score: Float32Array;
   /**
@@ -102,17 +124,52 @@ export interface FavModel {
 
 const models = new WeakMap<Catalog, SmallCache<FavModel>>();
 
-export function getFavModel(catalog: Catalog, favorites: readonly string[] | undefined): FavModel {
+/**
+ * Cached per catalog OBJECT (a WeakMap, so a replaced catalog takes its models
+ * with it) and per favourites list. The key spells out the data of favourites
+ * that are not in the catalog, since that data is all we know about them.
+ */
+export function getFavModel(catalog: Catalog, favorites: readonly FavoriteTitle[] | undefined): FavModel {
   let cache = models.get(catalog);
   if (!cache) {
-    cache = new SmallCache<FavModel>(8);
+    cache = new SmallCache<FavModel>(12);
     models.set(catalog, cache);
   }
-  const favs = favorites ?? [];
-  return cache.get(favs.join(','), () => buildFavModel(getIndex(catalog), favs));
+  const index = getIndex(catalog);
+  const favs = (favorites ?? []).filter((f): f is FavoriteTitle => !!f && typeof f.id === 'string');
+  let key = '';
+  for (const f of favs) {
+    key += index.byId.has(f.id) ? `${f.id},` : `${f.id}~${f.kind}~${f.title}~${(f.genres ?? []).join('+')}~${(f.keywords ?? []).join('+')},`;
+  }
+  return cache.get(key, () => buildFavModel(index, favs));
 }
 
-function favInfo(core: TitleCore, index: CatalogIndex): FavInfo {
+/** The catalog knows a title better than a search result does (more keywords, "people also like" links). */
+function favCore(f: FavoriteTitle, index: CatalogIndex): FavCore {
+  const item = index.byId.get(f.id)?.item;
+  if (item) return { id: item.id, kind: item.kind, title: item.title, genres: item.genres ?? [], keywords: item.keywords ?? [], related: item.related ?? [] };
+  return {
+    id: f.id,
+    kind: f.kind === 'movie' ? 'movie' : 'tv',
+    title: typeof f.title === 'string' && f.title ? f.title : 'a favourite',
+    genres: Array.isArray(f.genres) ? f.genres : [],
+    keywords: Array.isArray(f.keywords) ? f.keywords.filter((k) => typeof k === 'string') : [],
+    related: [],
+  };
+}
+
+function favInfos(index: CatalogIndex, favorites: readonly FavoriteTitle[]): FavInfo[] {
+  const out: FavInfo[] = [];
+  const done = new Set<string>();
+  for (const f of favorites) {
+    if (!f || typeof f.id !== 'string' || done.has(f.id)) continue;
+    done.add(f.id);
+    out.push(favInfo(favCore(f, index), index));
+  }
+  return out;
+}
+
+function favInfo(core: FavCore, index: CatalogIndex): FavInfo {
   const kw = new Map<string, number>();
   for (const k of core.keywords ?? []) kw.set(k, index.kwWeight(k));
   let kwWeightSum = 0;
@@ -123,16 +180,12 @@ function favInfo(core: TitleCore, index: CatalogIndex): FavInfo {
   return { core, kw, kwWeightSum, genres, genreWeightSum, related: new Set(core.related ?? []), item: index.byId.get(core.id)?.item ?? null };
 }
 
-function buildFavModel(index: CatalogIndex, favorites: readonly string[]): FavModel {
-  const favIds = new Set(favorites);
-  const favInfos: FavInfo[] = [];
-  for (const id of favIds) {
-    const core = index.refs.get(id);
-    if (!core) continue; // a favourite we know nothing about can't teach us anything
-    favInfos.push(favInfo(core, index));
-  }
+function buildFavModel(index: CatalogIndex, favorites: readonly FavoriteTitle[]): FavModel {
+  const infos = favInfos(index, favorites);
+  const favIds = new Set(infos.map((f) => f.core.id));
+  const norm = infos.length === 1 ? MULTI_NORM_SINGLE : MULTI_NORM;
 
-  const support = supportOf(favInfos);
+  const support = supportOf(infos);
   const n = index.infos.length;
   const score = new Float32Array(n);
   const matches: FavMatch[][] = new Array(n);
@@ -140,7 +193,7 @@ function buildFavModel(index: CatalogIndex, favorites: readonly string[]): FavMo
 
   for (const info of index.infos) {
     sims.length = 0;
-    for (const f of favInfos) {
+    for (const f of infos) {
       if (f.core.id === info.item.id) continue;
       const p = similarityParts(info, f, index, support, false);
       if (p.sim > SIM_FLOOR) sims.push({ f, s: p.sim, named: p.named });
@@ -150,7 +203,7 @@ function buildFavModel(index: CatalogIndex, favorites: readonly string[]): FavMo
     for (let k = 0; k < sims.length && k < MULTI_WEIGHTS.length; k++) {
       total += MULTI_WEIGHTS[k] * ((sims[k].s - SIM_FLOOR) / (1 - SIM_FLOOR));
     }
-    score[info.idx] = clamp((total / MULTI_NORM) * formatSupport(info, support));
+    score[info.idx] = clamp((total / norm) * formatSupport(info, support));
     matches[info.idx] = sims
       .filter((x) => x.named)
       .slice(0, 3)
@@ -162,7 +215,7 @@ function buildFavModel(index: CatalogIndex, favorites: readonly string[]): FavMo
   const kwCount = new Map<string, number>();
   const traitCount = new Map<string, number>();
   let withTraits = 0;
-  for (const f of favInfos) {
+  for (const f of infos) {
     for (const g of f.genres) genreShare.set(g, (genreShare.get(g) ?? 0) + 1);
     for (const k of f.kw.keys()) kwCount.set(k, (kwCount.get(k) ?? 0) + 1);
     const info = index.byId.get(f.core.id);
@@ -171,20 +224,24 @@ function buildFavModel(index: CatalogIndex, favorites: readonly string[]): FavMo
       for (const t of info.traits) traitCount.set(t, (traitCount.get(t) ?? 0) + 1);
     }
   }
-  for (const [g, c] of genreShare) genreShare.set(g, c / favInfos.length);
+  for (const [g, c] of genreShare) genreShare.set(g, c / infos.length);
   const traitShare = new Map<string, number>();
   // Only trust trait shares when enough favourites are in the catalog to judge.
   if (withTraits >= 3) for (const [t, c] of traitCount) traitShare.set(t, c / withTraits);
 
   const niches = new Set<NicheId>();
-  for (const f of favInfos) for (const x of nichesOf(f.item ?? f.core)) niches.add(x);
+  for (const f of infos) for (const x of nichesOf(f.item ?? f.core)) niches.add(x);
 
+  // The general shape of what they love. Three favourites all being hour-long says
+  // far less than twelve being so: the lift counts in proportion until there are
+  // SHAPE_FULL_FAVS of them to judge by.
   const traitLift = new Map<string, number>();
   if (withTraits >= 3) {
-    for (const [t, share] of index.traitShare) traitLift.set(t, (traitShare.get(t) ?? 0) - share);
+    const sure = clamp(withTraits / SHAPE_FULL_FAVS);
+    for (const [t, share] of index.traitShare) traitLift.set(t, ((traitShare.get(t) ?? 0) - share) * sure);
   }
 
-  return { favIds, favs: favInfos.map((f) => f.core), score, matches, genreShare, kwCount, traitShare, traitLift, niches };
+  return { favIds, favs: infos.map((f) => f.core), score, matches, genreShare, kwCount, traitShare, traitLift, niches };
 }
 
 function supportOf(favInfos: FavInfo[]): Support {
@@ -194,19 +251,19 @@ function supportOf(favInfos: FavInfo[]): Support {
     for (const k of f.kw.keys()) kwCount.set(k, (kwCount.get(k) ?? 0) + 1);
     for (const g of f.genres) genreCount.set(g, (genreCount.get(g) ?? 0) + 1);
   }
-  return { on: favInfos.length >= SUPPORT_MIN_FAVS, kwCount, genreCount };
+  return { strength: clamp((favInfos.length - SUPPORT_FROM) / (SUPPORT_FULL - SUPPORT_FROM)), kwCount, genreCount };
 }
 
 /** 0.5..1: scales a title's whole resemblance when its format is one the favourites barely touch. */
 function formatSupport(info: ItemInfo, support: Support): number {
-  if (!support.on) return 1;
+  if (support.strength <= 0) return 1;
   let factor = 1;
   for (const g of FORMAT_GENRES) {
     if (!info.item.genres.includes(g)) continue;
     const count = support.genreCount.get(g) ?? 0;
     if (count < FORMAT_SUPPORT.length) factor = Math.min(factor, FORMAT_SUPPORT[count]);
   }
-  return factor;
+  return damp(factor, support);
 }
 
 interface SimilarityParts {
@@ -239,13 +296,13 @@ function similarityParts(info: ItemInfo, f: FavInfo, index: CatalogIndex, suppor
     const w = f.kw.get(k);
     if (w !== undefined) {
       sharedPlain += w;
-      shared += support.on ? w * step(KW_SUPPORT, support.kwCount.get(k) ?? 1) : w;
+      shared += w * damp(step(KW_SUPPORT, support.kwCount.get(k) ?? 1), support);
       if (listKeywords) sharedKw.push(k);
     }
   }
   const kwOf = (x: number) => (x > 0 ? 0.7 * (1 - Math.exp(-x / KW_SCALE)) + 0.3 * ((2 * x) / (info.kwWeightSum + f.kwWeightSum)) : 0);
   const kw = kwOf(shared);
-  const kwPlain = support.on ? kwOf(sharedPlain) : kw;
+  const kwPlain = support.strength > 0 ? kwOf(sharedPlain) : kw;
 
   let sharedG = 0;
   let sharedGPlain = 0;
@@ -255,7 +312,7 @@ function similarityParts(info: ItemInfo, f: FavInfo, index: CatalogIndex, suppor
     if (!f.genres.has(g)) continue;
     const w = index.genreWeight(g);
     sharedGPlain += w;
-    sharedG += support.on ? w * step(GENRE_SUPPORT, support.genreCount.get(g) ?? 1) : w;
+    sharedG += w * damp(step(GENRE_SUPPORT, support.genreCount.get(g) ?? 1), support);
     if (w > rarest) rarest = w;
   }
   const unionG = info.genreWeightSum + f.genreWeightSum - sharedGPlain;
@@ -290,17 +347,14 @@ function similarityParts(info: ItemInfo, f: FavInfo, index: CatalogIndex, suppor
 }
 
 /** Development aid (used by dev/review.ts): why a title does or doesn't resemble each favourite. */
-export function explainTaste(catalog: Catalog, favorites: readonly string[], itemId: string): string[] {
+export function explainTaste(catalog: Catalog, favorites: readonly FavoriteTitle[], itemId: string): string[] {
   const index = getIndex(catalog);
   const info = index.byId.get(itemId);
   if (!info) return [`${itemId} is not in the catalog`];
   const lines: { s: number; text: string }[] = [];
-  const favInfos = [...new Set(favorites)].flatMap((id) => {
-    const core = index.refs.get(id);
-    return core ? [favInfo(core, index)] : [];
-  });
-  const support = supportOf(favInfos);
-  for (const f of favInfos) {
+  const infos = favInfos(index, favorites);
+  const support = supportOf(infos);
+  for (const f of infos) {
     if (f.core.id === itemId) continue;
     const p = similarityParts(info, f, index, support, true);
     lines.push({ s: p.sim, text: `${p.sim.toFixed(2)} ${f.core.title}${p.named ? '' : ' (not named)'}: keywords ${p.kw.toFixed(2)} [${p.sharedKw.join(', ')}], genres ${p.genre.toFixed(2)}, related ${p.rel.toFixed(2)}, format ${p.format.toFixed(2)}` });
@@ -326,8 +380,21 @@ export const IMPORT_KEYWORD = 'imp:k:';
 export const IMPORT_TRAIT = 'imp:t:';
 export const isImportKey = (key: string): boolean => key.startsWith('imp:');
 
+/**
+ * Learned weight (genres in full, themes and habits at half) that counts as
+ * knowing the person well. For scale: one "yes" adds about 0.5, so it takes
+ * eight or so consistent swipes; a real imported history gets there at once.
+ */
+const EVIDENCE_FULL = 4;
+
 export interface LearnedView {
   empty: boolean;
+  /**
+   * 0..1: how much swipes, an imported history and corrections have told us
+   * about this person altogether (0 = nothing, 1 = plenty). Used to tell a
+   * person we know from a person we don't (see "cold start" in rank.ts).
+   */
+  evidence: number;
   /** Swipes + watch history (or the manual correction, which outranks both). */
   genre(g: GenreId): number;
   keyword(k: string): number;
@@ -373,10 +440,21 @@ export function learnedView(taste: TasteWeights | undefined): LearnedView {
     else if (key.startsWith(IMPORT_KEYWORD)) impK.set(key.slice(IMPORT_KEYWORD.length), v);
     else if (key.startsWith(IMPORT_TRAIT)) impT.set(key.slice(IMPORT_TRAIT.length), v);
   }
+  let total = 0.5 * (corrected.genres.size + corrected.keywords.size + corrected.traits.size);
+  const mass = (map: Record<string, unknown>, scale: number) => {
+    for (const k of Object.keys(map)) {
+      const v = map[k];
+      if (typeof v === 'number' && Number.isFinite(v)) total += scale * Math.abs(v);
+    }
+  };
+  mass(genres as Record<string, unknown>, 1);
+  mass(keywords, 0.5);
+  mass(traits, 0.5); // includes the watch-history namespace
   const own = (map: Record<string, number>, k: string) => (Object.prototype.hasOwnProperty.call(map, k) ? map[k] : 0);
   const sum = (a: number, b: number | undefined) => (b === undefined ? a : clamp(a + b, -1, 1));
   return {
     empty: !hasCorrections && !hasLearned,
+    evidence: clamp(total / EVIDENCE_FULL),
     genre: (g) => corrected.genres.get(g) ?? sum(own(genres as Record<string, number>, g), impG.get(g)),
     keyword: (k) => corrected.keywords.get(k) ?? sum(own(keywords, k), impK.get(k)),
     trait: (t) => corrected.traits.get(t) ?? sum(own(traits, t), impT.get(t)),

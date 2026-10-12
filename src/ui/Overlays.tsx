@@ -2,14 +2,14 @@ import { useMemo, useState } from 'react';
 import type { CatalogItem, DeckCard, TogetherSession } from '../contracts';
 import { AdBadge, Poster } from './components';
 import { useApp } from './context';
-import { moodLabel, pickText, serviceName, timeLabel } from './helpers';
+import { joinPromptText, matchHeadline, moodLabel, pickText, serviceName, timeLabel } from './helpers';
 
 // ---------------------------------------------------------------------------
 // Join prompt (banner on any screen, or inline card on the Ask screen)
 // ---------------------------------------------------------------------------
 
 export function JoinCard({ session, inline, onDismiss }: { session: TogetherSession; inline?: boolean; onDismiss?: () => void }) {
-  const { services, me, setSessionLeft, goTab, toast } = useApp();
+  const { services, me, state, setSessionLeft, goTab, toast } = useApp();
   const [busy, setBusy] = useState(false);
   const join = async () => {
     if (busy) return;
@@ -28,9 +28,9 @@ export function JoinCard({ session, inline, onDismiss }: { session: TogetherSess
     <div className={`join-card ${inline ? 'inline' : 'banner'}`} role="alert" data-testid={inline ? 'join-prompt-inline' : 'join-prompt'} data-session-id={session.id}>
       <div className="join-text">
         <strong data-testid="join-text">
-          {session.startedBy} started a session: {moodLabel(session.request.mood)} {'·'} {timeLabel(session.request.time)}
+          {joinPromptText(session, state.members, me)}: {moodLabel(session.request.mood)} {'·'} {timeLabel(session.request.time)}
         </strong>
-        <span>Swipe the same deck and find what you both want.</span>
+        <span>Swipe the same deck and find what everyone wants.</span>
       </div>
       <div className="join-actions">
         <button type="button" className="btn btn-primary" data-testid={inline ? 'join-button-inline' : 'join-button'} disabled={busy} onClick={join}>
@@ -79,11 +79,13 @@ function Confetti() {
 export function MatchScreen({
   item,
   card,
+  audienceSize,
   onKeep,
   onWatching,
 }: {
   item: CatalogItem | undefined;
   card: DeckCard | undefined;
+  audienceSize: number;
   onKeep: () => void;
   onWatching: () => void;
 }) {
@@ -92,7 +94,7 @@ export function MatchScreen({
     <div className="overlay match" data-testid="match-screen" data-item-id={item?.id ?? card?.itemId}>
       <Confetti />
       <div className="pick-inner">
-        <p className="eyebrow match-eyebrow" data-testid="match-headline">It&rsquo;s a match!</p>
+        <p className="eyebrow match-eyebrow" data-testid="match-headline">{matchHeadline(audienceSize)}</p>
         <div className="match-poster-wrap">
           {item ? (
             <Poster title={item.title} year={item.year} poster={item.poster} size="w500" className="pick-poster match-poster" />

@@ -9,3 +9,5 @@ export function createSync(opts: CreateSyncOptions): SyncApi {
 
 export { createFirebaseSync } from './firebase';
 export type { FirebaseSyncApi, FirebaseSyncOptions } from './firebase';
+export { createMemorySync } from './memory';
+export type { MemorySyncApi } from './memory';

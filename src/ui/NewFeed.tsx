@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { CatalogItem, DeckCard, Engine, EngineContext, FollowUp, NewCard, SwipeAction, Who, WatchlistOwner } from '../contracts';
-import { Header, Icon, Poster, Segmented, ServiceLine, Sheet } from './components';
+import { Header, Icon, Poster, ServiceLine, Sheet } from './components';
+import { CatalogGate, WhoPicker } from './Pickers';
 import { useApp } from './context';
-import { formatDate, formatMinutes, pickText, saveOptions } from './helpers';
+import { cleanWho, formatDate, formatMinutes, joinNames, namesOf, pickText, saveOptions } from './helpers';
 
 const PAGE = 40;
 
@@ -77,15 +78,21 @@ function ActionRow({
 }
 
 export function NewFeed() {
-  const { services, state, me, engineCtx, itemById, perform, toast, followUpsShown } = useApp();
+  return (
+    <CatalogGate>
+      <NewFeedInner />
+    </CatalogGate>
+  );
+}
+
+function NewFeedInner() {
+  const { services, state, me, isSolo, engineCtx, itemById, perform, toast, followUpsShown } = useApp();
   const { engine, newArrivals } = services;
 
-  // Start on "Together" only when that is where this phone's follow-ups are.
-  const [whoSel, setWhoSel] = useState<'me' | 'Together'>(() => {
-    const ctx = engineCtx();
-    return safeFollowUps(engine, me, ctx).length === 0 && safeFollowUps(engine, 'Together', ctx).length > 0 ? 'Together' : 'me';
-  });
-  const who: Who = whoSel === 'me' ? me : 'Together';
+  // Starts on just me; switch on others to see what suits the group.
+  const [whoSel, setWho] = useState<Who>([me]);
+  const who: Who = cleanWho(whoSel, state.members, me);
+  const everyone = who.length > 1;
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const [shown, setShown] = useState(PAGE);
   const [fShown, setFShown] = useState(6);
@@ -93,7 +100,7 @@ export function NewFeed() {
   const [neverFor, setNeverFor] = useState<Acting | null>(null);
 
   // Everything the engine reads; the lists below rebuild when any of it changes.
-  const deps = [engine, who, state.seen, state.never, state.notTonight, state.profiles, state.settings, state.picks];
+  const deps = [engine, who.join(","), state.seen, state.never, state.notTonight, state.profiles, state.settings, state.picks];
 
   const ranked = useMemo(
     () => engine.rankNewArrivals(newArrivals, who, engineCtx()),
@@ -116,7 +123,7 @@ export function NewFeed() {
   useEffect(() => {
     if (fRows.length === 0) return;
     const ctx = engineCtx();
-    const keys = new Set<string>([...fRows.map((f) => f.key), ...safeFollowUps(engine, me, ctx).map((f) => f.key), ...safeFollowUps(engine, 'Together', ctx).map((f) => f.key)]);
+    const keys = new Set<string>([...fRows.map((f) => f.key), ...safeFollowUps(engine, [me], ctx).map((f) => f.key), ...safeFollowUps(engine, who, ctx).map((f) => f.key)]);
     followUpsShown([...keys]);
   }, [fRows.map((f) => f.key).join('|')]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -128,21 +135,13 @@ export function NewFeed() {
     if (action === 'yes') toast('Added to Matches');
   };
 
-  const save = saveOptions(me, who);
+  const save = saveOptions(me, who, state.members);
   const neverText = 'It will be hidden for you from now on. You can undo this later in Us.';
 
   return (
     <div className="screen with-tabs scroll" data-testid="new-feed">
       <Header title="New on our services" subtitle="Ranked by what we like" />
-      <Segmented
-        testPrefix="new-who"
-        value={whoSel}
-        onChange={setWhoSel}
-        options={[
-          { value: 'me', label: `Me (${me})` },
-          { value: 'Together', label: 'Together' },
-        ]}
-      />
+      {!isSolo && <WhoPicker who={who} onChange={setWho} />}
 
       {fRows.length > 0 && (
         <section className="followups" data-testid="followups">
@@ -187,7 +186,7 @@ export function NewFeed() {
 
       {rows.length === 0 ? (
         <p className="empty-note" data-testid="new-empty">
-          Nothing new for {whoSel === 'me' ? 'you' : 'both of you'} right now. Check back after the next daily update.
+          Nothing new for {everyone ? joinNames(namesOf(state.members, who)) : 'you'} right now. New arrivals and new seasons on your services show up here after each daily update.
         </p>
       ) : (
         <ul className="rows new-rows">

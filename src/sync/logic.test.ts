@@ -1,192 +1,216 @@
 import { describe, expect, it } from 'vitest';
-import type { TogetherSession } from '../contracts';
-import { assembleState } from './assemble';
-import { friendlyError, MSG, SyncError } from './errors';
-import { card, profile, request, snap } from './fixtures';
+import { APP_NAME } from '../config';
+import { MAX_NAME_LENGTH, type PickEntry, type TogetherSession } from '../contracts';
+import { assembleState, freshParts } from './assemble';
+import { friendlyError, isQuotaError, MSG, SyncError } from './errors';
+import { card, requestFor, snap } from './fixtures';
+import { INVITE_TTL_MS, nameKey } from './layout';
 import { decideSwipe, matchPickId, soloPickId } from './match';
-import { chunk, decodeDetail, encodeDetail, mergeSeenInputs, normalizeSeen, SEEN_SHARDS, shardOf } from './seen';
-import { checkCode, CODE_ALPHABET, generateCode, isValidCodeShape, normalizeCode } from './pairing';
+import { checkCode, CODE_ALPHABET, generateCode, isValidCodeShape, nameProblem, nameTaken, normalizeCode, tidyName } from './pairing';
+import { chunk, decodeSeen, encodeSeen, mergeSeenInputs, SEEN_SHARDS, shardOf } from './seen';
 
-const session = (): TogetherSession => ({
-  id: 's1',
-  startedBy: 'HG',
-  request,
-  deck: [card('tv-1'), card('tv-2')],
-  joined: ['HG'],
-  yes: { HG: [], BG: [] },
-  passed: { HG: [], BG: [] },
-  matches: [],
-  status: 'open',
-  createdAt: 1000,
-});
+const session = (who: string[]): TogetherSession => {
+  const yes: Record<string, string[]> = {};
+  const passed: Record<string, string[]> = {};
+  for (const m of who) {
+    yes[m] = [];
+    passed[m] = [];
+  }
+  return {
+    id: 's1',
+    startedBy: who[0]!,
+    request: requestFor(who),
+    deck: [card('tv-1'), card('tv-2')],
+    joined: [who[0]!],
+    yes,
+    passed,
+    matches: [],
+    status: 'open',
+    createdAt: 1000,
+  };
+};
 
-describe('decideSwipe', () => {
-  it('first yes is not a match', () => {
-    const d = decideSwipe(session(), 'HG', 'tv-1', true, snap(), 5);
-    expect(d.matched).toBe(false);
-    expect(d.session.yes.HG).toEqual(['tv-1']);
-    expect(d.pick).toBeNull();
-  });
-  it('second yes on the same title matches once, with a pick entry', () => {
-    const a = decideSwipe(session(), 'HG', 'tv-1', true, snap(), 5);
-    const b = decideSwipe(a.session, 'BG', 'tv-1', true, snap('X'), 6);
+describe('decideSwipe (N people)', () => {
+  it('a pair: first yes is not a match, second yes matches once with a pick for the audience', () => {
+    const a = decideSwipe(session(['m1', 'm2']), 'm1', 'tv-1', true, snap(), 5);
+    expect(a.matched).toBe(false);
+    expect(a.session.yes.m1).toEqual(['tv-1']);
+    const b = decideSwipe(a.session, 'm2', 'tv-1', true, snap('X'), 6);
     expect(b.matched).toBe(true);
     expect(b.session.matches).toEqual([{ itemId: 'tv-1', at: 6 }]);
-    expect(b.pick).toMatchObject({ kind: 'match', who: 'Together', itemId: 'tv-1', sessionId: 's1', id: matchPickId('s1', 'tv-1') });
-    // Repeating either yes never matches again.
-    expect(decideSwipe(b.session, 'BG', 'tv-1', true, snap(), 7).matched).toBe(false);
-    expect(decideSwipe(b.session, 'HG', 'tv-1', true, snap(), 7).matched).toBe(false);
+    expect(b.pick).toMatchObject({ kind: 'match', who: ['m1', 'm2'], itemId: 'tv-1', sessionId: 's1', id: matchPickId('s1', 'tv-1') });
+    // Repeating any yes never matches again.
+    expect(decideSwipe(b.session, 'm2', 'tv-1', true, snap(), 7).matched).toBe(false);
+    expect(decideSwipe(b.session, 'm1', 'tv-1', true, snap(), 7).matched).toBe(false);
   });
-  it('a pass never matches and does not change the other person', () => {
-    const a = decideSwipe(session(), 'HG', 'tv-1', true, snap(), 5);
-    const b = decideSwipe(a.session, 'BG', 'tv-1', false, snap(), 6);
-    expect(b.matched).toBe(false);
-    expect(b.session.passed.BG).toEqual(['tv-1']);
+
+  for (const n of [3, 4]) {
+    it(`${n} people: only the last yes matches, in any order`, () => {
+      const who = Array.from({ length: n }, (_, i) => `m${i + 1}`);
+      for (const order of [who, [...who].reverse(), [who[1]!, who[0]!, ...who.slice(2)]]) {
+        let s = session(who);
+        order.forEach((m, i) => {
+          const d = decideSwipe(s, m, 'tv-1', true, snap(), 10 + i);
+          expect(d.matched).toBe(i === n - 1);
+          s = d.session;
+        });
+        expect(s.matches).toHaveLength(1);
+      }
+    });
+    it(`${n} people: one pass means no match`, () => {
+      const who = Array.from({ length: n }, (_, i) => `m${i + 1}`);
+      let s = session(who);
+      s = decideSwipe(s, who[0]!, 'tv-1', false, snap(), 1).session;
+      for (const m of who.slice(1)) s = decideSwipe(s, m, 'tv-1', true, snap(), 2).session;
+      expect(s.matches).toEqual([]);
+      expect(s.passed[who[0]!]).toEqual(['tv-1']);
+    });
+  }
+
+  it('a pair inside a household of four: the other two are not needed and cannot swipe', () => {
+    const s0 = session(['m2', 'm4']);
+    const outsider = decideSwipe(s0, 'm1', 'tv-1', true, snap(), 1);
+    expect(outsider.matched).toBe(false);
+    expect(outsider.session.yes.m1).toBeUndefined();
+    const a = decideSwipe(s0, 'm2', 'tv-1', true, snap(), 2);
+    expect(decideSwipe(a.session, 'm4', 'tv-1', true, snap(), 3).matched).toBe(true);
   });
-  it('does not change its input', () => {
-    const s = session();
-    decideSwipe(s, 'HG', 'tv-1', true, snap(), 5);
-    expect(s.yes.HG).toEqual([]);
-  });
-  it('a yes for a title not in the deck is recorded but never matches', () => {
-    const a = decideSwipe(session(), 'HG', 'tv-9', true, snap(), 5);
-    expect(decideSwipe(a.session, 'BG', 'tv-9', true, snap(), 6).matched).toBe(false);
+
+  it('does not change its input; a yes for a title not in the deck never matches', () => {
+    const s = session(['m1', 'm2']);
+    decideSwipe(s, 'm1', 'tv-1', true, snap(), 5);
+    expect(s.yes.m1).toEqual([]);
+    const a = decideSwipe(s, 'm1', 'tv-9', true, snap(), 5);
+    expect(decideSwipe(a.session, 'm2', 'tv-9', true, snap(), 6).matched).toBe(false);
   });
 });
 
-describe('pairing codes', () => {
-  it('generates 6 unambiguous characters', () => {
-    for (let i = 0; i < 200; i++) {
+describe('invite codes and names', () => {
+  it('generates 6 unambiguous characters, using the whole alphabet', () => {
+    const seen = new Set<string>();
+    for (let i = 0; i < 2000; i++) {
       const c = generateCode();
       expect(c).toHaveLength(6);
       expect(isValidCodeShape(c)).toBe(true);
+      for (const ch of c) seen.add(ch);
     }
     expect(CODE_ALPHABET).not.toMatch(/[01OIL]/);
-    expect(CODE_ALPHABET).toHaveLength(31);
-  });
-  it('uses the whole alphabet roughly evenly', () => {
-    const seen = new Set<string>();
-    for (let i = 0; i < 2000; i++) for (const ch of generateCode()) seen.add(ch);
     expect(seen.size).toBe(31);
   });
   it('tidies typed input and rejects bad shapes', () => {
     expect(normalizeCode(' ab3-k9z ')).toBe('AB3K9Z');
-    expect(isValidCodeShape('AB3K9Z')).toBe(true);
     expect(isValidCodeShape('AB3K9')).toBe(false);
-    expect(isValidCodeShape('AB3K90')).toBe(false); // zero is not in the alphabet
+    expect(isValidCodeShape('AB3K90')).toBe(false);
     expect(isValidCodeShape('ab3k9z')).toBe(false);
   });
-  it('checks used and expiry (15 minutes)', () => {
-    expect(checkCode({ used: false, createdAtMs: 0 }, 14 * 60_000)).toBe('ok');
-    expect(checkCode({ used: false, createdAtMs: 0 }, 15 * 60_000)).toBe('expired');
-    expect(checkCode({ used: true, createdAtMs: 0 }, 1)).toBe('used');
+  it('checks used and the 24-hour expiry', () => {
+    const exp = INVITE_TTL_MS;
+    expect(INVITE_TTL_MS).toBe(24 * 3600 * 1000);
+    expect(checkCode({ used: false, expiresAtMs: exp }, exp - 1)).toBe('ok');
+    expect(checkCode({ used: false, expiresAtMs: exp }, exp)).toBe('expired');
+    expect(checkCode({ used: true, expiresAtMs: exp }, 1)).toBe('used');
+  });
+  it('validates names', () => {
+    expect(nameProblem('')).toMatch(/type a name/);
+    expect(nameProblem('   ')).toMatch(/type a name/);
+    expect(nameProblem('a'.repeat(MAX_NAME_LENGTH))).toBeNull();
+    expect(nameProblem('a'.repeat(MAX_NAME_LENGTH + 1))).toMatch(/at most 20/);
+    expect(nameProblem('Zoë 🎬')).toBeNull();
+    expect(nameProblem('bad\u0007name')).toMatch(/characters/);
+    expect(tidyName('  Sam   Lee ')).toBe('Sam Lee');
+    expect(nameKey(' Sam ')).toBe('n:sam');
+  });
+  it('names are unique ignoring case and spacing, except for the member being renamed', () => {
+    const ms = [{ id: 'm1', name: 'Alex' }, { id: 'm2', name: 'Sam' }];
+    expect(nameTaken('alex', ms)).toBe(true);
+    expect(nameTaken(' SAM ', ms)).toBe(true);
+    expect(nameTaken('Kit', ms)).toBe(false);
+    expect(nameTaken('ALEX', ms, 'm1')).toBe(false);
   });
 });
 
 describe('assembleState', () => {
-  it('fills defaults when nothing exists yet', () => {
-    const s = assembleState({ shared: null, seen: { HG: {}, BG: {} }, months: {}, sessions: [] });
-    expect(s.watchlist).toEqual([]);
-    expect(s.picks).toEqual([]);
-    expect(s.activeSession).toBeNull();
-    expect(s.profiles.HG.id).toBe('HG');
+  const hh = (ids: string[]) => ({
+    nextId: ids.length + 1,
+    members: Object.fromEntries(ids.map((id, i) => [id, { name: id.toUpperCase(), joinedAt: i + 1 }])),
+    names: {},
+    owners: {},
+    uids: {},
   });
-  it('combines documents; watchlist and picks newest first; no pick is ever cut off', () => {
-    const entries = (month: string, n: number, base: number) =>
-      Object.fromEntries(
-        Array.from({ length: n }, (_, i) => {
-          const id = `${month}-${i}`;
-          return [id, { id, at: base + i, kind: 'solo' as const, who: 'HG' as const, itemId: 'tv-1', snapshot: snap(), pick: { type: 'movie' as const }, service: card('x').service }];
-        }),
-      );
-    const s = assembleState({
-      shared: {
-        profiles: { HG: profile('HG'), BG: profile('BG') },
-        never: { HG: { 'tv-3': 1 } },
-        watchlist: {
-          'HG__tv-1': { itemId: 'tv-1', list: 'HG', addedBy: 'HG', at: 1, snapshot: snap() },
-          'ours__tv-2': { itemId: 'tv-2', list: 'ours', addedBy: 'BG', at: 9, snapshot: snap() },
-        },
-      },
-      seen: { HG: { 'tv-1': 5 }, BG: {} },
-      months: { '2026-09': { entries: entries('09', 200, 1000) }, '2026-10': { entries: entries('10', 200, 5000) } },
-      sessions: [],
+  const pick = (id: string, at: number, who = ['m1']): PickEntry => ({ id, at, kind: 'solo', who, itemId: 'tv-1', snapshot: snap(), pick: { type: 'movie' }, service: card('x').service });
+
+  for (const n of [1, 2, 3, 4]) {
+    it(`gives every one of ${n} members a key in every per-member record`, () => {
+      const ids = Array.from({ length: n }, (_, i) => `m${i + 1}`);
+      const parts = freshParts();
+      parts.household = hh(ids);
+      const s = assembleState(parts);
+      expect(Object.keys(s.members)).toEqual(ids);
+      for (const rec of [s.profiles, s.seen, s.never, s.notTonight]) expect(Object.keys(rec).sort()).toEqual(ids);
+      expect(s.profiles.m1!.id).toBe('m1');
+      expect(s.activeSession).toBeNull();
+      expect(s.picks).toEqual([]);
     });
-    expect(s.watchlist.map((w) => w.itemId)).toEqual(['tv-2', 'tv-1']);
-    expect(s.never.HG['tv-3']).toBe(1);
-    expect(s.seen.HG['tv-1']).toEqual({ at: 5, source: 'manual' });
+  }
+
+  it('combines documents; watchlist and picks newest first; no pick is ever cut off', () => {
+    const parts = freshParts();
+    parts.household = hh(['m1', 'm2']);
+    const entry = (id: string, list: string, at: number) => JSON.stringify({ itemId: id, list, addedBy: 'm1', at, snapshot: snap() });
+    parts.shared = { settings: { plans: { netflix: 'standard' } }, ours: { 'tv-2': entry('tv-2', 'ours', 9) } };
+    parts.memberDocs = { m1: { never: { 'tv-3': 1 }, watch: { 'tv-1': entry('tv-1', 'm1', 1) } }, m2: { notTonight: { 'tv-4': '2026-10-10' } } };
+    parts.seen = { m1: { 'tv-1': encodeSeen({ at: 5, source: 'import', plays: 2, snapshot: snap('S') }), junk: '{bad' } };
+    const month = (m: string, n: number, base: number) =>
+      Object.fromEntries(Array.from({ length: n }, (_, i) => [`${m}-${i}`, JSON.stringify(pick(`${m}-${i}`, base + i))]));
+    parts.months = { '2026-09': { entries: month('09', 200, 1000) }, '2026-10': { entries: month('10', 200, 5000) } };
+    const s = assembleState(parts);
+    expect(s.watchlist.map((w) => [w.itemId, w.list])).toEqual([['tv-2', 'ours'], ['tv-1', 'm1']]);
+    expect(s.never.m1!['tv-3']).toBe(1);
+    expect(s.notTonight.m2!['tv-4']).toBe('2026-10-10');
+    expect(s.seen.m1!['tv-1']).toEqual({ at: 5, source: 'import', plays: 2, snapshot: snap('S') });
+    expect(s.seen.m1!.junk).toBeUndefined();
+    expect(s.settings.plans.netflix).toBe('standard');
     expect(s.picks).toHaveLength(400);
-    expect(s.picks[0]!.at).toBeGreaterThan(s.picks[1]!.at);
     expect(s.picks[0]!.id).toBe('10-199');
     expect(s.picks[399]!.id).toBe('09-0');
   });
-  it('picks the newest open session and ignores ended ones', () => {
-    const a = { ...session(), id: 'a', createdAt: 1 };
-    const b = { ...session(), id: 'b', createdAt: 2 };
-    const c = { ...session(), id: 'c', createdAt: 3, status: 'ended' as const };
-    const s = assembleState({ shared: null, seen: { HG: {}, BG: {} }, months: {}, sessions: [a, c, b] });
-    expect(s.activeSession?.id).toBe('b');
+
+  it('shows the open session with a key for every audience member', () => {
+    const parts = freshParts();
+    parts.household = hh(['m1', 'm2', 'm3']);
+    const raw = { ...session(['m1', 'm3']), yes: { m1: ['tv-1'] }, passed: {} } as unknown as TogetherSession;
+    parts.session = raw;
+    const s = assembleState(parts);
+    expect(s.activeSession!.yes).toEqual({ m1: ['tv-1'], m3: [] });
+    expect(s.activeSession!.passed).toEqual({ m1: [], m3: [] });
+    parts.session = { ...raw, status: 'ended' };
+    expect(assembleState(parts).activeSession).toBeNull();
   });
+
   it('returns a new object every time', () => {
-    const p = { shared: null, seen: { HG: {}, BG: {} }, months: {}, sessions: [] };
+    const p = freshParts();
+    p.household = hh(['m1']);
     expect(assembleState(p)).not.toBe(assembleState(p));
   });
 });
 
-describe('old data shapes are read as the new ones', () => {
-  it('old numbers become manual SeenEntry values; details fill in snapshot/source/plays but never override membership', () => {
-    const detail = encodeDetail({ at: 99, source: 'import', plays: 4, snapshot: snap('Detailed') });
-    const out = normalizeSeen({ 'tv-1': 5, 'tv-2': 7, junk: 'x' }, { 'tv-2': detail, 'tv-gone': detail });
-    expect(out['tv-1']).toEqual({ at: 5, source: 'manual' });
-    // `at` is the number in the legacy map (an old phone's re-mark wins); the rest comes from the details.
-    expect(out['tv-2']).toEqual({ at: 7, source: 'import', plays: 4, snapshot: snap('Detailed') });
-    // Un-marked by an old phone (gone from the legacy map): the leftover details are ignored.
-    expect(out['tv-gone']).toBeUndefined();
-    expect(out.junk).toBeUndefined();
-  });
-  it('a full SeenEntry stored in the legacy map is read as is', () => {
-    expect(normalizeSeen({ 'tv-1': { at: 3, source: 'import', plays: 2 } })['tv-1']).toEqual({ at: 3, source: 'import', plays: 2 });
-  });
-  it('damaged details are ignored, not fatal', () => {
-    expect(decodeDetail('{not json')).toBeNull();
-    expect(decodeDetail(5)).toBeNull();
-    expect(normalizeSeen({ 'tv-1': 5 }, { 'tv-1': '{oops' })['tv-1']).toEqual({ at: 5, source: 'manual' });
-  });
-  it('old month documents (the "history" log) come out as picks, unchanged', () => {
-    const old = { id: 'abc-1', at: 10, kind: 'solo' as const, who: 'HG' as const, itemId: 'tv-1', snapshot: snap(), pick: { type: 'movie' as const }, service: card('x').service };
-    const s = assembleState({ shared: null, seen: { HG: {}, BG: {} }, months: { '2026-01': { entries: { 'abc-1': old } } }, sessions: [] });
-    expect(s.picks).toEqual([old]);
-  });
-  it('detail encoding round-trips', () => {
+describe('watched-title storage', () => {
+  it('encoding round-trips; damaged values are ignored, not fatal', () => {
     const e = { at: 1, source: 'onboarding' as const, snapshot: snap('X') };
-    expect(decodeDetail(encodeDetail(e))).toEqual(e);
+    expect(decodeSeen(encodeSeen(e))).toEqual(e);
+    expect(decodeSeen('{not json')).toBeNull();
+    expect(decodeSeen(5)).toBeNull();
   });
-});
-
-describe('mergeSeenInputs', () => {
   const inp = (itemId: string, extra = {}) => ({ itemId, source: 'import' as const, snapshot: snap(itemId), ...extra });
-  it('at defaults to now; re-marking takes the newer at and the larger plays', () => {
+  it('mergeSeenInputs: at defaults to now; re-marking takes the newer at and the larger plays', () => {
     const first = mergeSeenInputs([inp('a', { plays: 3 })], {}, 100);
     expect(first.a).toMatchObject({ at: 100, plays: 3, source: 'import' });
-    const again = mergeSeenInputs([inp('a', { at: 50, plays: 1 })], first, 200);
-    expect(again.a).toMatchObject({ at: 100, plays: 3 });
-    const newer = mergeSeenInputs([inp('a', { at: 500, plays: 9 })], first, 200);
-    expect(newer.a).toMatchObject({ at: 500, plays: 9 });
-  });
-  it('plays stays absent when nobody gave it; duplicates inside one call merge', () => {
+    expect(mergeSeenInputs([inp('a', { at: 50, plays: 1 })], first, 200).a).toMatchObject({ at: 100, plays: 3 });
+    expect(mergeSeenInputs([inp('a', { at: 500, plays: 9 })], first, 200).a).toMatchObject({ at: 500, plays: 9 });
     expect(mergeSeenInputs([inp('a')], {}, 1).a!.plays).toBeUndefined();
-    const m = mergeSeenInputs([inp('a', { at: 5, plays: 2 }), inp('a', { at: 9, plays: 1 })], {}, 1);
-    expect(m.a).toMatchObject({ at: 9, plays: 2 });
+    expect(mergeSeenInputs([inp('a', { at: 5, plays: 2 }), inp('a', { at: 9, plays: 1 })], {}, 1).a).toMatchObject({ at: 9, plays: 2 });
   });
-  it('old-style entries (no plays, manual) re-marked keep working', () => {
-    const m = mergeSeenInputs([{ itemId: 'a', source: 'manual', snapshot: snap() }], { a: { at: 7, source: 'manual' } }, 3);
-    expect(m.a).toMatchObject({ at: 7 });
-  });
-});
-
-describe('helpers', () => {
   it('shardOf is stable and in range', () => {
-    expect(shardOf('tv-1399')).toBe(shardOf('tv-1399'));
     const seen = new Set<number>();
     for (let i = 0; i < 2000; i++) {
       const n = shardOf(`tv-${i}`);
@@ -195,20 +219,30 @@ describe('helpers', () => {
       seen.add(n);
     }
     expect(seen.size).toBe(SEEN_SHARDS);
-    // Pinned: changing the hash would orphan stored details.
-    expect(shardOf('tv-1399')).toBe(0);
+    expect(shardOf('tv-1399')).toBe(0); // pinned: changing the hash would orphan stored data
   });
-  it('chunk splits evenly', () => {
+  it('chunk splits evenly; solo pick ids are stable', () => {
     expect(chunk([1, 2, 3, 4, 5], 2)).toEqual([[1, 2], [3, 4], [5]]);
-    expect(soloPickId('HG', 'tv-1')).toBe('solo-HG-tv-1');
+    expect(soloPickId(['m1'], 'tv-1')).toBe('solo-m1-tv-1');
+    expect(soloPickId(['m1', 'm2'], 'tv-1')).toBe('solo-m1+m2-tv-1');
   });
 });
 
-describe('friendlyError', () => {
+describe('error messages', () => {
   it('speaks plainly', () => {
     expect(friendlyError({ code: 'permission-denied' })).toBe(MSG.denied);
     expect(friendlyError({ code: 'unavailable' })).toBe(MSG.offline);
     expect(friendlyError(new SyncError('Hello'))).toBe('Hello');
     expect(friendlyError(new Error('FirebaseError: weird'))).toBe(MSG.generic);
+  });
+  it('maps an exhausted free quota to the specific message', () => {
+    expect(friendlyError({ code: 'resource-exhausted' })).toBe(MSG.quota);
+    expect(friendlyError({ code: 'firestore/resource-exhausted' })).toBe(MSG.quota);
+    expect(isQuotaError({ code: 'resource-exhausted' })).toBe(true);
+    expect(isQuotaError({ code: 'unavailable' })).toBe(false);
+    expect(MSG.quota).toBe(`${APP_NAME} is very busy today and has hit its free limit. Your lists are safe — please try again tomorrow.`);
+  });
+  it('no message contains jargon or error codes', () => {
+    for (const m of Object.values(MSG)) expect(m).not.toMatch(/firestore|firebase|permission|exception|error code/i);
   });
 });

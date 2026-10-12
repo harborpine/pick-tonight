@@ -1,10 +1,15 @@
 import { createContext, useContext, useEffect, useState, type Dispatch, type SetStateAction } from 'react';
 import type {
   AppServices,
+  Catalog,
   CatalogItem,
+  CatalogState,
+  CatalogStore,
+  DeckCard,
   DeviceState,
   EngineContext,
-  PersonId,
+  Member,
+  MemberId,
   ServiceChoice,
   SharedState,
   SuggestRequest,
@@ -16,6 +21,8 @@ import type {
 } from '../contracts';
 
 export type Tab = 'tonight' | 'new' | 'watchlist' | 'matches' | 'history' | 'us';
+
+export const EMPTY_CATALOG: Catalog = { schema: 1, builtAt: '', items: [] };
 
 export interface PerformArgs {
   item: CatalogItem;
@@ -34,17 +41,29 @@ export interface AppCtxValue {
   services: AppServices;
   state: SharedState;
   device: DeviceState;
-  me: PersonId;
+  me: MemberId;
+  /** Members in a stable display order. */
+  members: Member[];
+  /** True when the household has one person: no who-picker, no Together, one watchlist. */
+  isSolo: boolean;
+  /** The merged catalog for the household's services, or null while there is none yet. */
+  catalog: Catalog | null;
+  catalogState: CatalogState;
+  /** Resolves with the catalog for the household's current services (an empty one if it cannot be loaded). */
+  ensureCatalog: () => Promise<Catalog>;
+  retryCatalog: () => void;
+  /** Never has a null catalog: an empty one stands in until the real one arrives. */
   engineCtx: () => EngineContext;
   itemById: (id: string) => CatalogItem | undefined;
-  /** Best-effort title for any id (catalog items, then taste references). */
+  /** Best-effort title for any id (catalog, then anything saved with a snapshot or as a favourite). */
   titleOf: (id: string) => string;
   perform: (args: PerformArgs) => Promise<void>;
   /** A short message; with `action` it carries one button (e.g. Undo). */
   toast: (message: string, action?: ToastAction) => void;
   /** Mark follow-up keys as displayed on this phone (clears the New-tab dot). */
   followUpsShown: (keys: string[]) => void;
-  startOnboarding: (person: PersonId) => void;
+  /** Open the full-screen "tick what you have seen" grid for a member. */
+  startOnboarding: (member: MemberId) => void;
   goTab: (tab: Tab) => void;
   /** Tonight tab flow. */
   solo: SoloFlow | null;
@@ -62,7 +81,7 @@ export interface ToastAction {
 
 export interface SoloFlow {
   request: SuggestRequest;
-  cards: import('../contracts').DeckCard[];
+  cards: DeckCard[];
   /** How many cards were dealt to begin with (0 = nothing fit the request). */
   dealt: number;
   /** Right-swipes (yes) in this deck session, for the "Liked" chip. */
@@ -94,6 +113,13 @@ export function useSyncData(sync: SyncApi): { device: DeviceState; state: Shared
   return { device, state: shown };
 }
 
+/** Subscribe to the catalog store. */
+export function useCatalogState(store: CatalogStore): CatalogState {
+  const [s, setS] = useState<CatalogState>(() => store.get());
+  useEffect(() => store.on(setS), [store]);
+  return s;
+}
+
 /** Small local-only memory (last choices, collapsed sections). Never throws. */
 export function readLocal<T>(key: string, fallback: T): T {
   try {
@@ -109,4 +135,16 @@ export function writeLocal(key: string, value: unknown): void {
   } catch {
     /* private mode */
   }
+}
+export function removeLocal(key: string): void {
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    /* private mode */
+  }
+}
+
+export function plainError(e: unknown, fallback = 'Something went wrong. Please try again.'): string {
+  if (e instanceof Error && e.message) return e.message;
+  return fallback;
 }

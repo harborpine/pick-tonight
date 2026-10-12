@@ -47,7 +47,7 @@
 import type { Catalog, GenreId, ImportedTitle, Profile } from '../../contracts';
 import { GENRES } from '../../contracts';
 import { getIndex, nichesOf, type CatalogIndex } from '../catalogIndex';
-import { copyTaste } from '../learn';
+import { copyDealbreakers, copyTaste } from '../learn';
 import { IMPORT_GENRE, IMPORT_KEYWORD, IMPORT_TRAIT } from '../taste';
 import { clamp, round4 } from '../util';
 
@@ -89,7 +89,7 @@ export function titleWeight(plays: number): number {
 
 export function learnFromImport(profile: Profile, matched: ImportedTitle[], catalog: Catalog): Profile {
   const taste = copyTaste(profile.taste);
-  const next: Profile = { ...profile, favorites: [...(profile.favorites ?? [])], dealbreakers: { ...profile.dealbreakers }, taste };
+  const next: Profile = { ...profile, favorites: [...(profile.favorites ?? [])], dealbreakers: copyDealbreakers(profile.dealbreakers), taste };
 
   // One entry per title (a title listed twice keeps its larger play count).
   const titles = new Map<string, ImportedTitle>();
@@ -138,7 +138,7 @@ export function learnFromImport(profile: Profile, matched: ImportedTitle[], cata
       inCatalogW += w;
       for (const t of info.traits) if (t !== 'kind:movie' && t !== 'kind:tv') add(traitW, t, w);
     }
-    const niches = nichesOf(info ? info.item : { ...m.entry, tmdbId: 0, related: [], genres: (m.entry.genres ?? []) as GenreId[], keywords: m.entry.keywords ?? [] });
+    const niches = nichesOf(info ? info.item : { kind: m.entry.kind, genres: (m.entry.genres ?? []) as GenreId[], keywords: m.entry.keywords ?? [] });
     for (const n of niches) {
       add(nicheW, n, w);
       add(nicheN, n, 1);

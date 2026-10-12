@@ -100,13 +100,13 @@ export function Segmented<T extends string>({
   onChange,
   testPrefix,
 }: {
-  options: { value: T; label: string }[];
+  options: { value: T; label: string; memberId?: string }[];
   value: T;
   onChange: (v: T) => void;
   testPrefix: string;
 }) {
   return (
-    <div className="segmented" role="tablist">
+    <div className={`segmented ${options.length > 3 ? 'scrolly' : ''}`} role="tablist">
       {options.map((o) => (
         <button
           key={o.value}
@@ -115,6 +115,7 @@ export function Segmented<T extends string>({
           aria-selected={o.value === value}
           className={o.value === value ? 'on' : ''}
           data-testid={`${testPrefix}-${o.value}`}
+          data-member-id={o.memberId}
           onClick={() => onChange(o.value)}
         >
           {o.label}

@@ -1,64 +1,104 @@
-/** Builds one SharedState from the handful of Firestore documents (pure). */
-import { DEFAULT_PLANS, type PersonId, type PickEntry, type Profile, type SharedState, type TogetherSession } from '../contracts';
-import type { MonthDoc, SharedDoc } from './layout';
-import { normalizeSeen } from './seen';
+/** Builds one SharedState from the Firestore documents of a household (pure). */
+import {
+  memberOrder,
+  NO_DEALBREAKERS,
+  type Member,
+  type MemberId,
+  type PickEntry,
+  type Profile,
+  type SharedState,
+  type TogetherSession,
+  type WatchlistEntry,
+} from '../contracts';
+import type { HouseholdDoc, MemberDoc, MonthDoc, SharedDoc } from './layout';
+import { normalizeSession } from './match';
+import { decodeSeenMap } from './seen';
 
 export interface RawParts {
+  household: HouseholdDoc | null;
   shared: SharedDoc | null;
-  /** The legacy per-person map from data/seen_{P}.m: itemId -> ms (older data may be any shape; see normalizeSeen). */
-  seen: Record<PersonId, Record<string, unknown>>;
-  /** Details from the seenx shards, merged per person: itemId -> JSON string. Absent for old households. */
-  seenDetails?: Record<PersonId, Record<string, string>>;
+  /** data/{memberId} documents. */
+  memberDocs: Record<MemberId, MemberDoc>;
+  /** member id -> merged `e` maps of that member's seen shards (itemId -> JSON). */
+  seen: Record<MemberId, Record<string, string>>;
   /** month id (YYYY-MM) -> document */
   months: Record<string, MonthDoc>;
-  /** every session document with status 'open' */
-  sessions: TogetherSession[];
+  /** The session document, if there is one. */
+  session: TogetherSession | null;
 }
 
-export function normalizeSession(s: TogetherSession): TogetherSession {
-  return {
-    ...s,
-    deck: s.deck ?? [],
-    joined: s.joined ?? [],
-    yes: { HG: s.yes?.HG ?? [], BG: s.yes?.BG ?? [] },
-    passed: { HG: s.passed?.HG ?? [], BG: s.passed?.BG ?? [] },
-    matches: s.matches ?? [],
-  };
-}
+export const freshParts = (): RawParts => ({ household: null, shared: null, memberDocs: {}, seen: {}, months: {}, session: null });
 
-const emptyProfile = (id: PersonId): Profile => ({
+export const emptyProfile = (id: MemberId): Profile => ({
   id,
   favorites: [],
-  dealbreakers: { horror: false, trueCrime: false, scary: false },
+  dealbreakers: { ...NO_DEALBREAKERS, genres: [] },
   taste: { genres: {}, keywords: {}, traits: {}, corrections: {} },
   onboarded: false,
 });
 
+function parseJson<T>(raw: unknown): T | null {
+  if (typeof raw !== 'string') return null;
+  try {
+    const v = JSON.parse(raw) as T;
+    return v && typeof v === 'object' ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+function readWatch(map: Record<string, string> | undefined, list: string, into: WatchlistEntry[]): void {
+  for (const raw of Object.values(map ?? {})) {
+    const e = parseJson<WatchlistEntry>(raw);
+    if (e && typeof e.itemId === 'string') into.push({ ...e, list });
+  }
+}
+
 export function assembleState(parts: RawParts): SharedState {
+  const hh = parts.household;
   const sh = parts.shared ?? {};
+  const members: Record<MemberId, Member> = {};
+  for (const [id, m] of Object.entries(hh?.members ?? {})) members[id] = { id, name: m.name, joinedAt: m.joinedAt };
+  const ids = memberOrder(members);
+
+  const profiles: SharedState['profiles'] = {};
+  const seen: SharedState['seen'] = {};
+  const never: SharedState['never'] = {};
+  const notTonight: SharedState['notTonight'] = {};
+  const watchlist: WatchlistEntry[] = [];
+  for (const id of ids) {
+    const md = parts.memberDocs[id] ?? {};
+    const p = md.profile as Profile | undefined;
+    profiles[id] = p && typeof p === 'object' ? { ...emptyProfile(id), ...p, id } : emptyProfile(id);
+    seen[id] = decodeSeenMap(parts.seen[id]);
+    never[id] = { ...md.never };
+    notTonight[id] = { ...md.notTonight };
+    readWatch(md.watch, id, watchlist);
+  }
+  readWatch(sh.ours, 'ours', watchlist);
+  watchlist.sort((a, b) => b.at - a.at || (a.itemId < b.itemId ? -1 : 1));
+
   // Every pick in every month document: nothing is cut off (the list is small because people remove picks).
   const picks: PickEntry[] = [];
-  for (const m of Object.values(parts.months)) picks.push(...Object.values(m.entries ?? {}));
+  for (const m of Object.values(parts.months)) {
+    for (const raw of Object.values(m.entries ?? {})) {
+      const e = parseJson<PickEntry>(raw);
+      if (e && typeof e.id === 'string') picks.push(e);
+    }
+  }
   picks.sort((a, b) => b.at - a.at || (a.id < b.id ? 1 : -1));
 
-  const open = parts.sessions
-    .filter((s) => s.status === 'open')
-    .sort((a, b) => b.createdAt - a.createdAt || (a.id < b.id ? 1 : -1));
+  const s = parts.session && parts.session.status === 'open' ? normalizeSession(parts.session) : null;
 
   return {
-    profiles: {
-      HG: sh.profiles?.HG ?? emptyProfile('HG'),
-      BG: sh.profiles?.BG ?? emptyProfile('BG'),
-    },
-    seen: {
-      HG: normalizeSeen(parts.seen.HG, parts.seenDetails?.HG),
-      BG: normalizeSeen(parts.seen.BG, parts.seenDetails?.BG),
-    },
-    never: { HG: { ...sh.never?.HG }, BG: { ...sh.never?.BG } },
-    notTonight: { HG: { ...sh.notTonight?.HG }, BG: { ...sh.notTonight?.BG } },
-    watchlist: Object.values(sh.watchlist ?? {}).sort((a, b) => b.at - a.at),
+    members,
+    profiles,
+    seen,
+    never,
+    notTonight,
+    watchlist,
     picks,
-    settings: sh.settings ?? { plans: { ...DEFAULT_PLANS } },
-    activeSession: open[0] ? normalizeSession(open[0]) : null,
+    settings: sh.settings ?? { plans: {} },
+    activeSession: s,
   };
 }

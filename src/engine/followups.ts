@@ -14,23 +14,30 @@
  *  SPINOFF — the title is a spinoff / continuation (item.spinoffOf) of
  *    something a watcher has watched, and nobody watching has seen the spinoff.
  *
- * Both kinds obey the usual gates: on our plans, no dealbreakers, not Never,
+ * Both kinds obey the usual gates: on our plans, nobody's never-show-me choices, not Never,
  * not already on the Matches tab, and not swiped "not tonight" today (the same
  * gates as the New feed they sit above).
  *
  * Order: fresh news first (a season that has just started), newest first;
  * then the evergreen spinoffs, best taste match first. Within each of those,
- * for Together, things BOTH have watched come before things one of them has.
+ * for a group, things MORE of them have watched come before things fewer have
+ * (what everyone watched first).
+ *
+ * Wording: alone it is just "Season 4 is out"; for a group it says whose show
+ * it is — "you both watched this" / "all three of you watched this" when it is
+ * everyone's, otherwise by name ("one of Sam's shows", "Alex and Sam both
+ * watched this"). Member ids are never shown.
  *
  * Dates: an air date is a calendar day (YYYY-MM-DD) and "last watched" is a
  * timestamp, which is read as its UTC calendar day. So a show watched late in
  * the evening can count as watched "the next day"; the error is one day at
  * most and errs towards NOT announcing a season they may already have started.
  */
-import { watchers, type EngineContext, type FollowUp, type PersonId, type Who } from '../contracts';
+import { watchers, type EngineContext, type FollowUp, type Who } from '../contracts';
 import { getIndex, sameTitleKey } from './catalogIndex';
-import { buildReasons, feedScore, personCtx } from './rank';
-import { chooseService, hasSeen, hitsDealbreaker, isNeverHidden, isNotTonight, pickedIds, pickFor, watchedAt } from './rules';
+import { allOfYou, namedSubject, possessive } from './phrases';
+import { buildReasons, feedScore, personCtx, type PersonCtx } from './rank';
+import { audienceDealbreakers, breaksAny, chooseService, isNotTonight, neverChecker, pickedIds, pickFor, watchedAt } from './rules';
 
 /** A new season is news for this long after it starts... */
 export const NEW_SEASON_DAYS = 120;
@@ -49,31 +56,42 @@ function dayNumber(date: string | undefined): number | null {
 
 interface Ranked {
   card: FollowUp;
-  both: boolean;
+  /** For a group: how many of the watchers it is about (0 when watching alone, so it never affects the order). */
+  shared: number;
   /** Day number of the news, when it is fresh; null for evergreen spinoffs. */
   news: number | null;
 }
 
 export function followUps(who: Who, ctx: EngineContext): FollowUp[] {
+  const audience = watchers(who);
+  if (!audience.length) return [];
   const today = dayNumber(ctx.today);
   const index = getIndex(ctx.catalog);
-  const audience = watchers(who);
   const people = audience.map((p) => personCtx(p, ctx));
   const plans = ctx.state.settings?.plans;
   const picked = pickedIds(who, ctx);
+  const breakers = audienceDealbreakers(who, ctx);
+  const neverHidden = neverChecker(who, ctx);
   const together = audience.length > 1;
   const out: Ranked[] = [];
   const done = new Set<string>();
 
+  /** The name of a title that may not be in the catalog: from the catalog, a watcher's favourites, or their watched list. */
   const titleOf = (id: string): string | null => {
-    const known = index.refs.get(id)?.title;
+    const known = index.byId.get(id)?.item.title;
     if (known) return known;
+    for (const p of people) {
+      const fav = p.fav.favs.find((f) => f.id === id);
+      if (fav && fav.title !== 'a favourite') return fav.title;
+    }
     for (const p of audience) {
       const snap = (ctx.state.seen?.[p]?.[id] as { snapshot?: { title?: string } } | undefined)?.snapshot?.title;
       if (snap) return snap;
     }
     return null;
   };
+  /** "you both" / "all three of you" when it is everyone watching, otherwise their names. */
+  const whoWatched = (fans: PersonCtx[]): string => (fans.length === audience.length ? allOfYou(audience.length) : namedSubject(fans.map((p) => p.name)));
 
   for (const info of index.infos) {
     const item = info.item;
@@ -84,14 +102,14 @@ export function followUps(who: Who, ctx: EngineContext): FollowUp[] {
     // ---- the usual gates ----
     const service = chooseService(item, plans);
     if (!service) continue;
-    if (hitsDealbreaker(item, who, ctx)) continue;
-    if (isNeverHidden(item.id, who, ctx)) continue;
+    if (breaksAny(item, breakers)) continue;
+    if (neverHidden(item.id)) continue;
     if (isNotTonight(item.id, who, ctx)) continue;
     if (picked.has(item.id)) continue;
     const key = sameTitleKey(item);
     if (done.has(key)) continue;
 
-    const seenFlags = audience.map((p) => hasSeen(p, item.id, ctx));
+    const seenFlags = people.map((p) => p.seen(item.id));
     let found: Ranked | null = null;
 
     if (seenFlags.includes(true)) {
@@ -101,18 +119,17 @@ export function followUps(who: Who, ctx: EngineContext): FollowUp[] {
       if (!season || aired === null || today === null || season.number < 2) continue;
       const age = today - aired;
       if (age < 0 || age > NEW_SEASON_DAYS) continue;
-      const newFor = audience.filter((p, k) => {
+      const newFor = people.filter((p, k) => {
         if (!seenFlags[k]) return false;
-        const at = watchedAt(p, item.id, ctx);
+        const at = watchedAt(p.person, item.id, ctx);
         return at === null ? age <= UNDATED_DAYS : aired > Math.floor(at / DAY_MS);
       });
       if (!newFor.length) continue;
       const pick = pickFor(item, Number.POSITIVE_INFINITY, !seenFlags.includes(false), 0, false);
       if (!pick) continue;
-      const both = together && !seenFlags.includes(false);
-      const whose = !together ? '' : newFor.length === audience.length ? ' — you both watched this' : ` — one of ${newFor[0]}'s shows`;
+      const whose = !together ? '' : newFor.length === 1 ? ` — one of ${possessive(newFor[0].name)} shows` : ` — ${whoWatched(newFor)} watched this`;
       found = {
-        both,
+        shared: together ? seenFlags.filter(Boolean).length : 0,
         news: aired,
         card: {
           itemId: item.id,
@@ -132,33 +149,32 @@ export function followUps(who: Who, ctx: EngineContext): FollowUp[] {
       };
     } else if (parents.length) {
       // ---- spinoff of something they watched (nobody watching has seen the spinoff itself) ----
-      let best: { id: string; fans: PersonId[]; rank: number } | null = null;
+      let best: { id: string; fans: PersonCtx[]; rank: number } | null = null;
       parents.forEach((id, order) => {
         if (id === item.id) return;
-        const fans = audience.filter((p) => hasSeen(p, id, ctx));
+        const fans = people.filter((p) => p.seen(id));
         if (!fans.length) return;
-        const fav = fans.some((p) => ctx.state.profiles?.[p]?.favorites?.includes(id));
-        const latest = Math.max(0, ...fans.map((p) => watchedAt(p, id, ctx) ?? 0));
-        // Both watched it > a favourite > the most recently watched > one we can name > listed first.
-        const rank = (fans.length === audience.length ? 8 : 0) + (fav ? 4 : 0) + (titleOf(id) ? 1 : 0) + latest / 1e14 - order / 1e6;
+        const fav = fans.some((p) => p.fav.favIds.has(id));
+        const latest = Math.max(0, ...fans.map((p) => watchedAt(p.person, id, ctx) ?? 0));
+        // Watched by more of them (everyone, ideally) > a favourite > the most recently watched > one we can name > listed first.
+        const rank = (16 * fans.length) / audience.length + (fav ? 4 : 0) + (titleOf(id) ? 1 : 0) + latest / 1e14 - order / 1e6;
         if (!best || rank > best.rank) best = { id, fans, rank };
       });
-      const parent = best as { id: string; fans: PersonId[] } | null;
+      const parent = best as { id: string; fans: PersonCtx[] } | null;
       if (!parent) continue;
       const pick = pickFor(item, Number.POSITIVE_INFINITY, false, 0, true);
       if (!pick) continue;
-      const both = together && parent.fans.length === audience.length;
       const name = titleOf(parent.id);
       const text = !together
         ? `A spinoff of ${name ?? 'something you watched'}`
         : name
-          ? `A spinoff of ${name}, which ${both ? 'you both' : parent.fans[0]} watched`
-          : `A spinoff of something ${both ? 'you both' : parent.fans[0]} watched`;
+          ? `A spinoff of ${name}, which ${whoWatched(parent.fans)} watched`
+          : `A spinoff of something ${whoWatched(parent.fans)} watched`;
       // A spinoff whose own latest season has only just started is news too.
       const aired = dayNumber(item.latestSeason?.airDate);
       const fresh = aired !== null && today !== null && today - aired >= 0 && today - aired <= NEW_SEASON_DAYS;
       found = {
-        both,
+        shared: together ? parent.fans.length : 0,
         news: fresh ? aired : null,
         card: {
           itemId: item.id,
@@ -185,7 +201,7 @@ export function followUps(who: Who, ctx: EngineContext): FollowUp[] {
   out.sort(
     (a, b) =>
       Number(b.news !== null) - Number(a.news !== null) ||
-      Number(b.both) - Number(a.both) ||
+      b.shared - a.shared ||
       (b.news ?? -1) - (a.news ?? -1) ||
       b.card.score - a.card.score ||
       (a.card.itemId < b.card.itemId ? -1 : 1),

@@ -10,7 +10,7 @@ import { IMPORT_MAX_GENRE, IMPORT_MAX_KEYWORD, IMPORT_MAX_KEYWORDS, IMPORT_MAX_T
 import { nameKey } from './history/normalize';
 import { parseDate } from './history/parse';
 import { createEngine } from './index';
-import { makeCtx, req } from './testkit';
+import { makeCtx, req, SAM, sampleProfile } from './testkit';
 
 const engine = createEngine();
 const C = FIXTURE_CATALOG;
@@ -60,9 +60,9 @@ describe('parseWatchHistory: Netflix', () => {
   it("reads Netflix's full account export (ViewingActivity.csv) and skips trailers and previews", () => {
     const text = [
       'Profile Name,Start Time,Duration,Attributes,Title,Supplemental Video Type,Device Type,Bookmark,Latest Bookmark,Country',
-      'HG,2026-10-02 01:15:44,00:21:40,,The Office (U.S.): Season 4: Dinner Party,,Apple TV,00:21:40,00:21:40,US (United States)',
-      'HG,2026-10-01 23:02:10,00:00:31,Autoplayed: user action: None;,Season 2 Trailer: Wednesday,TRAILER,Apple TV,00:00:31,00:00:31,US (United States)',
-      'HG,2026-09-30 00:10:00,01:43:02,,Paddington 2,,iPhone,01:43:02,01:43:02,US (United States)',
+      'Alex,2026-10-02 01:15:44,00:21:40,,The Office (U.S.): Season 4: Dinner Party,,Apple TV,00:21:40,00:21:40,US (United States)',
+      'Alex,2026-10-01 23:02:10,00:00:31,Autoplayed: user action: None;,Season 2 Trailer: Wednesday,TRAILER,Apple TV,00:00:31,00:00:31,US (United States)',
+      'Alex,2026-09-30 00:10:00,01:43:02,,Paddington 2,,iPhone,01:43:02,01:43:02,US (United States)',
     ].join('\n');
     const p = engine.parseWatchHistory(text, 'ViewingActivity.csv');
     expect(p.format).toBe('netflix');
@@ -163,7 +163,7 @@ describe('parseWatchHistory: JSON', () => {
 
   it('finds the records inside a wrapper object, uses the series name, and understands other field spellings', () => {
     const text = JSON.stringify({
-      account: { profileName: 'BG' },
+      account: { profileName: 'Sam' },
       viewingHistory: [
         { seriesTitle: 'Breaking Bad', episodeTitle: 'Ozymandias', seasonNumber: 5, date_watched: '2026-09-20' },
         { series_name: 'Ted Lasso', episode_name: 'Biscuits', timestamp: 1775044800 }, // seconds
@@ -426,7 +426,7 @@ describe('matchWatchHistory', () => {
 
 // ---------------------------------------------------------------------------
 describe('learnFromImport', () => {
-  const base = engine.defaultProfile('BG', C);
+  const base = sampleProfile('sam');
   const imported = (id: string, plays: number): ImportedTitle => ({ entry: IDX.titles.find((t) => t.id === id)!, plays });
   // A history that is mostly films: romance and romantic comedy, a little action.
   const filmNight: ImportedTitle[] = [
@@ -462,7 +462,11 @@ describe('learnFromImport', () => {
     const p = engine.learnFromImport(base, filmNight, C);
     const t = p.taste.traits;
     expect(t['imp:g:romance']).toBeGreaterThan(0.1);
-    expect(t['imp:g:comedy']).toBeGreaterThan(0.05);
+    // CHANGED for the public version (was > 0.05; the value is now 0.045, was 0.062). "How common is
+    // comedy in the catalog" used to count the seeded taste references as well as the catalog's own
+    // titles; those references no longer exist, so comedy is 45% of this 58-title sample instead of
+    // 43%, and a history that is 37% comedy stands out a little less against it.
+    expect(t['imp:g:comedy']).toBeGreaterThan(0.04);
     expect(t['imp:g:romance']).toBeGreaterThan(t['imp:g:action'] ?? 0);
     expect(t['imp:g:horror']).toBeUndefined(); // nothing is learned about what isn't there — and nothing negative, ever
     expect(t['imp:t:kind:movie']).toBeGreaterThan(0.05); // she watches films too (her favourites are all series)
@@ -483,8 +487,8 @@ describe('learnFromImport', () => {
     // ...and the decks are identical too.
     const deck = (p: typeof base) => {
       const ctx = makeCtx();
-      ctx.state.profiles.BG = p;
-      return engine.buildDeck(req({ who: 'BG', mood: 'romantic', novelty: 'new' }), ctx, { limit: 100 });
+      ctx.state.profiles.sam = p;
+      return engine.buildDeck(req({ who: SAM, mood: 'romantic', novelty: 'new' }), ctx, { limit: 100 });
     };
     expect(deck(twice)).toEqual(deck(once));
   });
@@ -537,38 +541,38 @@ describe('learnFromImport', () => {
       entry: { id: `movie-${7000 + k}`, kind: 'movie', title: `Western ${k}`, year: 1965, genres: ['western'], keywords: [], popularity: 1 },
       plays: 1,
     }));
-    const t = engine.learnFromImport(engine.defaultProfile('HG', C), offCatalog, C).taste.traits;
+    const t = engine.learnFromImport(sampleProfile('alex'), offCatalog, C).taste.traits;
     expect(t['imp:g:western']).toBeGreaterThan(0.2);
     expect(t['imp:t:kind:movie']).toBeGreaterThan(0.1);
     expect(Object.keys(t).filter((k) => k.startsWith('imp:k:'))).toEqual([]);
   });
 
-  it('moves the deck meaningfully: BG (all-series favourites) starts getting the kind of films she watches', () => {
-    const r = req({ who: 'BG', mood: 'romantic', time: 'any', novelty: 'new' });
+  it('moves the deck meaningfully: Sam (all-series favourites) starts getting the kind of films she watches', () => {
+    const r = req({ who: SAM, mood: 'romantic', time: 'any', novelty: 'new' });
     const before = engine.buildDeck(r, makeCtx(), { limit: 100 });
     const ctx = makeCtx();
-    ctx.state.profiles.BG = engine.learnFromImport(base, filmNight, C);
+    ctx.state.profiles.sam = engine.learnFromImport(base, filmNight, C);
     const after = engine.buildDeck(r, ctx, { limit: 100 });
     const score = (deck: typeof before, id: string) => deck.find((c) => c.itemId === id)!.score;
     for (const id of ['movie-11036', 'movie-455207']) expect(score(after, id), id).toBeGreaterThan(score(before, id) + 0.04);
     // ...by more than a single right-swipe would, but not so much that taste from favourites stops mattering.
     const swiped = makeCtx();
-    swiped.state.profiles.BG = engine.learnFromSwipe(base, C.items.find((i) => i.id === 'movie-11036')!, 'yes', C);
+    swiped.state.profiles.sam = engine.learnFromSwipe(base, C.items.find((i) => i.id === 'movie-11036')!, 'yes', C);
     const afterSwipe = engine.buildDeck(r, swiped, { limit: 100 });
     expect(score(after, 'movie-455207') - score(before, 'movie-455207')).toBeGreaterThan(score(afterSwipe, 'movie-455207') - score(before, 'movie-455207'));
     expect(score(after, 'movie-455207') - score(before, 'movie-455207')).toBeLessThan(0.3);
   });
 
   it('a manual correction still outranks what an import taught', () => {
-    const r = req({ who: 'BG', mood: 'romantic', time: 'any', novelty: 'new' });
+    const r = req({ who: SAM, mood: 'romantic', time: 'any', novelty: 'new' });
     const ctx = makeCtx();
-    ctx.state.profiles.BG = engine.learnFromImport(base, filmNight, C);
+    ctx.state.profiles.sam = engine.learnFromImport(base, filmNight, C);
     const liked = engine.buildDeck(r, ctx, { limit: 100 });
-    ctx.state.profiles.BG = engine.correctTaste(ctx.state.profiles.BG, 'genre:romance', 'less');
+    ctx.state.profiles.sam = engine.correctTaste(ctx.state.profiles.sam, 'genre:romance', 'less');
     const corrected = engine.buildDeck(r, ctx, { limit: 100 });
     const score = (deck: typeof liked, id: string) => deck.find((c) => c.itemId === id)!.score;
     expect(score(corrected, 'movie-11036')).toBeLessThan(score(liked, 'movie-11036') - 0.2);
-    const line = engine.describeTaste(ctx.state.profiles.BG, C).find((l) => l.key === 'genre:romance')!;
+    const line = engine.describeTaste(ctx.state.profiles.sam, C).find((l) => l.key === 'genre:romance')!;
     expect(line).toMatchObject({ correction: 'less', source: 'corrected', text: 'Less romance, as you asked' });
   });
 
@@ -613,9 +617,9 @@ describe('learnFromImport', () => {
       entry: { id: `tv-${6000 + k}`, kind: 'tv', title: `Anime ${k}`, year: 2015, genres: ['animation', 'action'], keywords: ['anime', 'based on manga'], popularity: 1 },
       plays: 12,
     }));
-    const hg = engine.defaultProfile('HG', C);
-    expect(engine.describeTaste(hg, C).find((l) => l.key === 'keyword:anime')?.strength ?? -1).toBeLessThan(0);
-    const after = engine.learnFromImport(hg, anime, C);
+    const alex = sampleProfile('alex');
+    expect(engine.describeTaste(alex, C).find((l) => l.key === 'keyword:anime')?.strength ?? -1).toBeLessThan(0);
+    const after = engine.learnFromImport(alex, anime, C);
     expect(after.taste.traits['imp:k:anime']).toBeGreaterThan(0.15);
     // The taste page no longer says he avoids it (the line turns positive, or makes way for stronger ones).
     expect(engine.describeTaste(after, C).find((l) => l.key === 'keyword:anime')?.strength ?? 0).toBeGreaterThanOrEqual(0);
@@ -630,7 +634,7 @@ describe('learnFromImport', () => {
   it('end to end: file -> rows -> titles -> taste, on the sample Netflix history', () => {
     const res = engine.matchWatchHistory(engine.parseWatchHistory(sampleNetflixHistory()), IDX);
     expect(res.matched.length).toBeGreaterThan(15);
-    const p = engine.learnFromImport(engine.defaultProfile('HG', C), res.matched, C);
+    const p = engine.learnFromImport(sampleProfile('alex'), res.matched, C);
     expect(impKeys(p).length).toBeGreaterThan(3);
     expect(engine.learnFromImport(p, res.matched, C)).toEqual(p);
     expect(JSON.stringify(p.taste).length).toBeLessThan(4000); // stays small enough to sync

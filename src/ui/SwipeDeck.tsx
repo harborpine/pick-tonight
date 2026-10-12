@@ -240,7 +240,7 @@ export function SwipeDeck({ cards, resetKey, save, neverText, onAction, empty, t
           {Icon.eye}
           <span>Seen it</span>
         </button>
-        <button type="button" className="act" data-testid="action-save" aria-label="Save to watchlist" onClick={() => setSheet('save')}>
+        <button type="button" className="act" data-testid="action-save" aria-label="Save to watchlist" onClick={() => (save.options.length === 1 ? exit('up', 'save', save.options[0].list) : setSheet('save'))}>
           {Icon.bookmark}
           <span>Save</span>
         </button>

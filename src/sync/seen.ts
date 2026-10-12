@@ -1,21 +1,15 @@
 /**
  * Watched titles (pure helpers shared by the memory and Firebase implementations).
- *
- * Storage (see README.md): the OLD per-person number map (`seen_HG.m.{id} = ms`) is kept exactly as it
- * always was, so the old app version keeps working. The new details (source, plays, title snapshot) live
- * in separate shard documents (`seenx/HG_3`) that the old app never reads.
+ * Stored per member in SEEN_SHARDS documents; each title is ONE JSON string (a single indexed value).
  */
-import type { PersonId, SeenEntry, SeenInput, SeenSource } from '../contracts';
+import type { SeenEntry, SeenInput, SeenSource } from '../contracts';
 
-/** Detail shards per person. Spreads the details so no document gets near 1 MiB. */
+/** Detail shards per member. Spreads titles so no document gets near 1 MiB. */
 export const SEEN_SHARDS = 8;
 /** Titles written per network request (one atomic batch). Keeps requests ~250 KB. */
 export const SEEN_CHUNK = 1000;
-/**
- * Most watched titles one person can have. Firestore allows 40,000 index entries per document and the legacy
- * number map (kept for the old app) uses 2 per title; measured against the live project: 19,900 worked, 20,100 failed.
- */
-export const SEEN_MAX = 19500;
+/** Most watched titles one person can have (keeps a household's storage bounded). */
+export const SEEN_MAX = 10000;
 
 /** Stable shard number (0..SEEN_SHARDS-1) for a title id. Must never change once data exists. */
 export function shardOf(itemId: string): number {
@@ -24,22 +18,16 @@ export function shardOf(itemId: string): number {
   return h % SEEN_SHARDS;
 }
 
-export const shardDocId = (p: PersonId, shard: number): string => `${p}_${shard}`;
-
 const SOURCES: SeenSource[] = ['manual', 'import', 'onboarding'];
 
-/**
- * Details are stored as ONE JSON string per title: a string is a single indexed value, whereas a nested
- * map would use ~6 of the 40,000 index entries Firestore allows per document.
- */
-export function encodeDetail(e: SeenEntry): string {
+export function encodeSeen(e: SeenEntry): string {
   const o: Record<string, unknown> = { at: e.at, source: e.source };
   if (e.plays !== undefined) o.plays = e.plays;
   if (e.snapshot) o.snapshot = e.snapshot;
   return JSON.stringify(o);
 }
 
-export function decodeDetail(raw: unknown): SeenEntry | null {
+export function decodeSeen(raw: unknown): SeenEntry | null {
   if (typeof raw !== 'string') return null;
   try {
     const o = JSON.parse(raw) as Partial<SeenEntry> | null;
@@ -53,22 +41,12 @@ export function decodeDetail(raw: unknown): SeenEntry | null {
   }
 }
 
-/**
- * Reads ANY stored shape into SeenEntry values:
- *  - old number n                 -> { at: n, source: 'manual' }
- *  - a full SeenEntry object      -> as is (tolerated in case a later version stores objects in `m`)
- * Membership comes only from `m` (so a title the OLD app un-marks disappears even if details linger).
- * `at` always comes from `m` (so a re-mark made by the OLD app wins); other details come from `details`.
- */
-export function normalizeSeen(m: Record<string, unknown> | undefined, details?: Record<string, string>): Record<string, SeenEntry> {
+/** Decode a map of JSON strings, dropping anything unreadable. */
+export function decodeSeenMap(raw: Record<string, unknown> | undefined): Record<string, SeenEntry> {
   const out: Record<string, SeenEntry> = {};
-  for (const [id, v] of Object.entries(m ?? {})) {
-    if (typeof v === 'number') {
-      const d = decodeDetail(details?.[id]);
-      out[id] = d ? { ...d, at: v } : { at: v, source: 'manual' };
-    } else if (v && typeof v === 'object' && typeof (v as SeenEntry).at === 'number') {
-      out[id] = { ...(v as SeenEntry) };
-    }
+  for (const [id, v] of Object.entries(raw ?? {})) {
+    const e = decodeSeen(v);
+    if (e) out[id] = e;
   }
   return out;
 }

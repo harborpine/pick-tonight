@@ -2,17 +2,17 @@
  * Service worker. Deliberately conservative: a broken one can strand a phone on
  * an old version, so nearly everything goes to the network first.
  *
- *  - Pages (navigations / index.html) and data/*.json: network first, cache when offline.
+ *  - Pages (navigations / index.html) and data/** (manifest, per-service catalog files, new.json, titles.json): network first, cache when offline.
  *  - assets/* (hashed file names, never change): cache first.
  *  - Poster images from TMDB: cache first, small bounded cache.
  *  - Firebase / Google API traffic and anything else cross-origin: not touched at all.
  *
  * Bump VERSION to throw away every old cache on the next launch.
  */
-const VERSION = 'v1';
-const PAGES = `wtw-pages-${VERSION}`;
-const ASSETS = `wtw-assets-${VERSION}`;
-const IMAGES = `wtw-images-${VERSION}`;
+const VERSION = 'v2';
+const PAGES = `pt-pages-${VERSION}`;
+const ASSETS = `pt-assets-${VERSION}`;
+const IMAGES = `pt-images-${VERSION}`;
 const KEEP = [PAGES, ASSETS, IMAGES];
 const MAX_IMAGES = 200;
 const NETWORK_TIMEOUT_MS = 4000;
@@ -26,7 +26,7 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(
     (async () => {
       const names = await caches.keys();
-      await Promise.all(names.filter((n) => n.startsWith('wtw-') && !KEEP.includes(n)).map((n) => caches.delete(n)));
+      await Promise.all(names.filter((n) => n.startsWith('pt-') && !KEEP.includes(n)).map((n) => caches.delete(n)));
       await self.clients.claim();
     })(),
   );

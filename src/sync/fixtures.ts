@@ -1,18 +1,23 @@
 /** Small builders shared by the sync tests. */
-import { DEFAULT_PLANS, type DeckCard, type HouseholdSeed, type PersonId, type Profile, type SuggestRequest, type TitleSnapshot } from '../contracts';
+import {
+  NO_DEALBREAKERS,
+  type DeckCard,
+  type NewProfile,
+  type Settings,
+  type SuggestRequest,
+  type TitleSnapshot,
+  type Who,
+  normalizeWho,
+} from '../contracts';
 
-export const profile = (id: PersonId, favorites: string[] = []): Profile => ({
-  id,
-  favorites,
-  dealbreakers: { horror: id === 'BG', trueCrime: id === 'BG', scary: id === 'BG' },
+export const profile = (favorites: string[] = [], horror = false): NewProfile => ({
+  favorites: favorites.map((id) => ({ id, kind: 'tv', title: id, year: 2020, genres: [], keywords: [], poster: null })),
+  dealbreakers: { ...NO_DEALBREAKERS, horror, genres: [] },
   taste: { genres: {}, keywords: {}, traits: {}, corrections: {} },
   onboarded: false,
 });
 
-export const seed = (): HouseholdSeed => ({
-  profiles: { HG: profile('HG', ['tv-1']), BG: profile('BG', ['tv-2']) },
-  settings: { plans: { ...DEFAULT_PLANS } },
-});
+export const settings = (): Settings => ({ plans: { netflix: 'standard', hulu: 'ads' } });
 
 export const card = (itemId: string): DeckCard => ({
   itemId,
@@ -25,11 +30,11 @@ export const card = (itemId: string): DeckCard => ({
 
 export const snap = (title = 'A Movie'): TitleSnapshot => ({ title, year: 2020, poster: null });
 
-export const request: SuggestRequest = {
-  who: 'Together',
+export const requestFor = (who: Who | string[]): SuggestRequest => ({
+  who: normalizeWho(who),
   viewing: 'focused',
   mood: 'laugh',
   time: 120,
   novelty: 'either',
   genre: null,
-};
+});

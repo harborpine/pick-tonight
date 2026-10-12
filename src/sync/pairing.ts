@@ -1,5 +1,5 @@
-/** Pairing code helpers (pure; shared by the Firebase implementation and tests). */
-import { CODE_TTL_MS } from './layout';
+/** Invite code and name helpers (pure; shared by the Firebase and memory implementations and tests). */
+import { MAX_NAME_LENGTH } from '../contracts';
 
 /** 31 characters; no 0/O, 1/I/L (easy to misread when typed from another phone). */
 export const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
@@ -31,16 +31,34 @@ export function isValidCodeShape(code: string): boolean {
   return code.length === CODE_LENGTH && [...code].every((c) => CODE_ALPHABET.includes(c));
 }
 
-export interface CodeRecord {
-  used: boolean;
-  /** ms since epoch when the code was made (server time). */
-  createdAtMs: number;
-}
-
 export type CodeCheck = 'ok' | 'used' | 'expired';
 
-export function checkCode(rec: CodeRecord, nowMs: number): CodeCheck {
+/** `expiresAtMs` is the server-stamped expiry; `nowMs` the phone's clock (only used for the friendly message). */
+export function checkCode(rec: { used: boolean; expiresAtMs: number }, nowMs: number): CodeCheck {
   if (rec.used) return 'used';
-  if (nowMs >= rec.createdAtMs + CODE_TTL_MS) return 'expired';
+  if (nowMs >= rec.expiresAtMs) return 'expired';
   return 'ok';
+}
+
+// ---- names ----
+
+/** The name with surrounding spaces removed and inner runs of spaces collapsed. */
+export function tidyName(name: string): string {
+  return name.replace(/\s+/g, ' ').trim();
+}
+
+/** A plain-language problem with this name, or null when it is fine. Length counts visible characters. */
+export function nameProblem(name: string): string | null {
+  const n = tidyName(name);
+  if (n.length === 0) return 'Please type a name.';
+  if ([...n].length > MAX_NAME_LENGTH) return `Names can be at most ${MAX_NAME_LENGTH} characters.`;
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f]/.test(n)) return "That name has characters that can't be used.";
+  return null;
+}
+
+/** True when another member (not `exceptId`) already has this name, ignoring upper/lower case. */
+export function nameTaken(name: string, members: { id: string; name: string }[], exceptId?: string): boolean {
+  const k = tidyName(name).toLowerCase();
+  return members.some((m) => m.id !== exceptId && tidyName(m.name).toLowerCase() === k);
 }

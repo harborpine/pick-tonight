@@ -1,10 +1,15 @@
 /**
- * Per-catalog lookups, computed once per catalog object and cached (WeakMap),
- * so a deck request never re-scans the ~3,000 titles for things that don't
+ * Per-catalog lookups, computed once per catalog object and cached, so a deck
+ * request never re-scans the catalog (anything from a few hundred titles for
+ * one service to 6,000-8,000 for a household with many) for things that don't
  * depend on the request: keyword rarity, quality scores, popularity ranks,
  * and each title's "traits".
+ *
+ * The cache is a WeakMap keyed on the catalog OBJECT. A household that changes
+ * its plans gets a new catalog object, which gets its own index; the old one
+ * is released along with the old catalog (nothing here keeps it alive).
  */
-import type { Catalog, CatalogItem, GenreId, TitleCore } from '../contracts';
+import type { Catalog, CatalogItem, GenreId, TitleKind } from '../contracts';
 import { clamp } from './util';
 
 export interface ItemInfo {
@@ -44,8 +49,6 @@ export interface CatalogIndex {
   catalog: Catalog;
   infos: ItemInfo[];
   byId: Map<string, ItemInfo>;
-  /** Every title we know anything about: catalog items plus taste references. */
-  refs: Map<string, TitleCore>;
   /** Keyword rarity 0..1 (1 = very rare, so sharing it means a lot). */
   kwWeight(k: string): number;
   /** Genre rarity 0.2..1 ("drama" says little, "western" says a lot). */
@@ -103,8 +106,8 @@ export const NICHES: Record<NicheId, { key: string; label: string }> = {
 const ANIME_KEYWORDS = new Set(['anime', 'based on manga', 'shounen', 'shonen', 'seinen', 'shoujo', 'shojo', 'josei', 'isekai', 'based on light novel', 'mecha', 'japanese animation']);
 const KIDS_CERTS = new Set(['TV-Y', 'TV-Y7', 'TV-Y7-FV']);
 
-/** Works for catalog items and for bare taste references (which have no certification). */
-export function nichesOf(t: TitleCore & { certification?: string; attention?: string }): NicheId[] {
+/** Works for catalog items and for bare favourites / lookup entries (which have no certification). */
+export function nichesOf(t: { kind: TitleKind; genres?: GenreId[]; keywords?: string[]; certification?: string; attention?: string }): NicheId[] {
   const out: NicheId[] = [];
   const genres = t.genres ?? [];
   // Anime is recognised by its tags, or (because the catalog marks every
@@ -141,18 +144,14 @@ export function getIndex(catalog: Catalog): CatalogIndex {
 
 function build(catalog: Catalog): CatalogIndex {
   const builtYear = Number.parseInt((catalog.builtAt ?? '').slice(0, 4), 10) || 2026;
-  const refs = new Map<string, TitleCore>();
-  for (const r of catalog.tasteRefs ?? []) refs.set(r.id, r);
-  for (const i of catalog.items) refs.set(i.id, i); // the full item wins when both exist
-
   // How many titles carry each keyword / genre.
   const kwDf = new Map<string, number>();
   const genreDf = new Map<GenreId, number>();
-  for (const r of refs.values()) {
+  for (const r of catalog.items) {
     for (const k of new Set(r.keywords ?? [])) kwDf.set(k, (kwDf.get(k) ?? 0) + 1);
     for (const g of new Set(r.genres ?? [])) genreDf.set(g, (genreDf.get(g) ?? 0) + 1);
   }
-  const n = Math.max(1, refs.size);
+  const n = Math.max(1, catalog.items.length);
   const logN = Math.log(1 + n);
   const kwW = new Map<string, number>();
   for (const [k, df] of kwDf) kwW.set(k, Math.log(1 + n / df) / logN);
@@ -219,5 +218,5 @@ function build(catalog: Catalog): CatalogIndex {
   const byId = new Map(infos.map((i) => [i.item.id, i]));
   const traitShare = new Map<string, number>();
   for (const info of infos) for (const t of info.traits) traitShare.set(t, (traitShare.get(t) ?? 0) + 1 / infos.length);
-  return { catalog, infos, byId, refs, kwWeight, genreWeight, genreShare, traitShare, builtYear };
+  return { catalog, infos, byId, kwWeight, genreWeight, genreShare, traitShare, builtYear };
 }

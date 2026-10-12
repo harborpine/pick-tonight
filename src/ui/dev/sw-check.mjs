@@ -5,7 +5,7 @@ const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
 const page = await ctx.newPage();
 const U = 'http://localhost:4173/pick-tonight/?catalog=fixture&sync=memory';
 await page.goto(U);
-await page.getByTestId('setup').waitFor();
+await page.getByTestId('welcome').waitFor();
 await page.evaluate(() => navigator.serviceWorker.ready);
 await page.reload();
 await page.waitForTimeout(800);
@@ -13,7 +13,7 @@ console.log('controlled:', await page.evaluate(() => !!navigator.serviceWorker.c
 console.log('caches:', await page.evaluate(async () => (await caches.keys()).join(',')));
 await ctx.setOffline(true);
 await page.reload();
-await page.getByTestId('setup').waitFor({ timeout: 8000 });
+await page.getByTestId('welcome').waitFor({ timeout: 8000 });
 console.log('offline reload OK');
 await ctx.setOffline(false);
 await browser.close();

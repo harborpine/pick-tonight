@@ -4,27 +4,33 @@ import {
   DEFAULT_REQUEST,
   GENRES,
   MOODS,
-  PEOPLE,
   type GenreId,
   type MoodId,
   type Novelty,
-  type PersonId,
+  type MemberId,
   type SuggestRequest,
   type TogetherSession,
   type ViewingType,
   type Who,
 } from '../contracts';
 import { Chip, Header, Icon, Sheet } from './components';
+import { CatalogGate, WhoPicker } from './Pickers';
 import { readLocal, useApp, writeLocal } from './context';
 import {
   TIME_OPTIONS,
   inSession,
+  cleanWho,
+  joinNames,
   looseningHints,
   moodLabel,
+  nameOf,
+  namesOf,
   needsToJoin,
-  otherPerson,
+  othersPickingText,
   remainingSessionCards,
   saveOptions,
+  sessionWaitingFor,
+  sessionWithoutMe,
   timeLabel,
   whoLabel,
 } from './helpers';
@@ -44,8 +50,8 @@ const NOVELTY: { value: Novelty; label: string; hint?: string }[] = [
   { value: 'either', label: 'Either', hint: 'mostly new' },
 ];
 
-function summary(r: SuggestRequest): string {
-  return `${whoLabel(r.who)} · ${moodLabel(r.mood)} · ${timeLabel(r.time)}`;
+function summary(r: SuggestRequest, members: Record<MemberId, { id: MemberId; name: string }>): string {
+  return `${whoLabel(r.who, members)} · ${moodLabel(r.mood)} · ${timeLabel(r.time)}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -53,6 +59,14 @@ function summary(r: SuggestRequest): string {
 // ---------------------------------------------------------------------------
 
 export function Tonight() {
+  return (
+    <CatalogGate>
+      <TonightInner />
+    </CatalogGate>
+  );
+}
+
+function TonightInner() {
   const { state, me, solo, sessionLeft } = useApp();
   const session = state.activeSession;
   if (inSession(session, me) && !sessionLeft) return <SessionView session={session} />;
@@ -64,12 +78,12 @@ export function Tonight() {
 // Ask
 // ---------------------------------------------------------------------------
 
-function loadAsk(me: PersonId): SuggestRequest {
-  const saved = readLocal<Partial<SuggestRequest> | null>(`wtw.ui.ask.v1.${me}`, null);
-  const base: SuggestRequest = { ...DEFAULT_REQUEST, who: me };
+function loadAsk(me: MemberId, members: Record<MemberId, { id: MemberId; name: string }>): SuggestRequest {
+  const saved = readLocal<Partial<SuggestRequest> | null>(`pt.ui.ask.v2.${me}`, null);
+  const base: SuggestRequest = { ...DEFAULT_REQUEST, who: [me] };
   if (!saved) return base;
   const ok = {
-    who: (['HG', 'BG', 'Together'] as Who[]).includes(saved.who as Who) ? (saved.who as Who) : base.who,
+    who: cleanWho(saved.who, members, me),
     viewing: VIEWING.some((v) => v.value === saved.viewing) ? (saved.viewing as ViewingType) : base.viewing,
     mood: MOODS.some((m) => m.id === saved.mood) ? (saved.mood as MoodId) : base.mood,
     time: TIME_OPTIONS.some((t) => t.value === saved.time) ? (saved.time as SuggestRequest['time']) : base.time,
@@ -80,9 +94,9 @@ function loadAsk(me: PersonId): SuggestRequest {
 }
 
 function Ask() {
-  const { services, state, me, engineCtx, setSolo, setSessionLeft, toast, joinDismissed } = useApp();
+  const { services, state, me, isSolo, engineCtx, setSolo, setSessionLeft, toast, joinDismissed } = useApp();
   const { engine, sync } = services;
-  const [req, setReq] = useState<SuggestRequest>(() => loadAsk(me));
+  const [req, setReq] = useState<SuggestRequest>(() => loadAsk(me, state.members));
   const [busy, setBusy] = useState(false);
 
   const session = state.activeSession;
@@ -103,13 +117,13 @@ function Ask() {
     if (busy) return;
     setBusy(true);
     try {
-      writeLocal(`wtw.ui.ask.v1.${me}`, req);
+      writeLocal(`pt.ui.ask.v2.${me}`, req);
       const deck = engine.buildDeck(req, engineCtx(), { seed: randomSeed() });
       if (deck.length === 0) {
         setSolo({ request: req, cards: [], dealt: 0, liked: 0 });
         return;
       }
-      if (req.who === 'Together') {
+      if (req.who.length > 1) {
         await sync.startSession(me, req, deck);
         setSessionLeft(false);
         setSolo(null);
@@ -124,8 +138,9 @@ function Ask() {
     }
   };
 
-  const other = otherPerson(me);
   const resumable = inSession(session, me);
+  const together = req.who.length > 1;
+  const forOther = req.who.length === 1 && req.who[0] !== me ? nameOf(state.members, req.who[0]) : null;
 
   return (
     <div className="screen with-tabs scroll ask" data-testid="ask">
@@ -137,22 +152,23 @@ function Ask() {
       {resumable && (
         <button type="button" className="resume-banner" data-testid="resume-session" onClick={() => setSessionLeft(false)}>
           <strong>Together session in progress</strong>
-          <span>{summary(session.request)} {'—'} tap to go back to it</span>
+          <span>{summary(session.request, state.members)} {'—'} tap to go back to it</span>
         </button>
       )}
       {needsToJoin(session, me) && joinDismissed === session.id && <JoinCard session={session} inline />}
+      {sessionWithoutMe(session, me) && (
+        <p className="quiet-line" data-testid="session-others">
+          {othersPickingText(session, state.members)}
+        </p>
+      )}
 
-      <section className="ask-group" data-testid="ask-group-who">
-        <h2>Who&rsquo;s watching?</h2>
-        <div className="chip-row">
-          {[...PEOPLE, 'Together' as const].map((w) => (
-            <Chip key={w} selected={req.who === w} testId={`ask-who-${w}`} onClick={() => set('who', w)}>
-              {w === me ? `${w} (me)` : w}
-            </Chip>
-          ))}
-        </div>
-        {req.who === other && <p className="hint">Picking for {other}. What you do with the cards applies to {other}.</p>}
-      </section>
+      {!isSolo && (
+        <section className="ask-group" data-testid="ask-group-who">
+          <h2>Who&rsquo;s watching?</h2>
+          <WhoPicker who={req.who} onChange={(w) => set('who', w)} />
+          {forOther && <p className="hint">Picking for {forOther}. What you do with the cards applies to {forOther}.</p>}
+        </section>
+      )}
 
       <section className="ask-group" data-testid="ask-group-viewing">
         <h2>How closely?</h2>
@@ -221,11 +237,11 @@ function Ask() {
 
       <div className="ask-submit">
         <button type="button" className="btn btn-primary btn-xl" data-testid="ask-submit" disabled={busy} onClick={submit}>
-          {busy ? 'Finding…' : req.who === 'Together' ? 'Start together' : 'Show me'}
+          {busy ? 'Finding…' : together ? 'Start together' : 'Show me'}
         </button>
-        {req.who === 'Together' && (
+        {together && (
           <p className="hint center">
-            {other} will get a prompt to join{session ? ' (this replaces the session already open)' : ''}.
+            {joinNames(namesOf(state.members, req.who.filter((id) => id !== me)))} will get a prompt to join{session ? ' (this replaces the session already open)' : ''}.
           </p>
         )}
       </div>
@@ -273,26 +289,26 @@ function LikedChip({ count, onOpen }: { count: number; onOpen: () => void }) {
 }
 
 function SoloView() {
-  const { solo, setSolo, me, perform, itemById, goTab } = useApp();
+  const { solo, setSolo, me, state, isSolo, perform, itemById, goTab } = useApp();
   const resetKey = useMemo(() => String(Math.random()), [solo?.request]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!solo) return null;
   const { request } = solo;
-  const save = saveOptions(me, request.who);
+  const save = saveOptions(me, request.who, state.members);
   const cards: StackCardData[] = solo.cards.flatMap((card) => {
     const item = itemById(card.itemId);
     return item ? [{ card, item }] : [];
   });
   const who = request.who;
   const neverText =
-    who === me
-      ? "It will be hidden for you from now on. You can undo this later in Us."
-      : `It will be hidden for ${who} from now on. You can undo this later in Us.`;
+    who.length === 1 && who[0] === me
+      ? 'It will be hidden for you from now on. You can undo this later in Us.'
+      : `It will be hidden for ${nameOf(state.members, who[0])} from now on. You can undo this later in Us.`;
 
   return (
     <div className="screen with-tabs deckscreen" data-testid="solo-deck" data-mode="solo">
       <Header
-        title={whoLabel(request.who)}
-        subtitle={summary(request).split(' · ').slice(1).join(' · ')}
+        title={isSolo ? 'Tonight' : whoLabel(request.who, state.members)}
+        subtitle={summary(request, state.members).split(' · ').slice(1).join(' · ')}
         left={
           <button type="button" className="icon-btn" aria-label="Back to the questions" data-testid="deck-back" onClick={() => setSolo(null)}>
             {Icon.back}
@@ -327,14 +343,15 @@ function SoloView() {
 // ---------------------------------------------------------------------------
 
 function SessionView({ session }: { session: TogetherSession }) {
-  const { services, me, perform, itemById, engineCtx, setSessionLeft, titleOf, toast } = useApp();
+  const { services, me, state, perform, itemById, engineCtx, setSessionLeft, titleOf, toast } = useApp();
   const { engine, sync } = services;
   const [confirmEnd, setConfirmEnd] = useState(false);
   const [moreBusy, setMoreBusy] = useState(false);
   const [noMore, setNoMore] = useState(false);
-  const other = otherPerson(me);
-  const partnerIn = session.joined.includes(other);
-  const save = saveOptions(me, 'Together');
+  const waitingNames = namesOf(state.members, sessionWaitingFor(session));
+  const allIn = waitingNames.length === 0;
+  const joinedNames = namesOf(state.members, session.joined.filter((id) => id !== me));
+  const save = saveOptions(me, session.request.who, state.members);
 
   const cards: StackCardData[] = remainingSessionCards(session, me).flatMap((card) => {
     const item = itemById(card.itemId);
@@ -368,8 +385,8 @@ function SessionView({ session }: { session: TogetherSession }) {
   };
 
   const status = (
-    <div className={`session-status ${partnerIn ? 'in' : 'wait'}`} data-testid="session-status" data-partner-joined={partnerIn}>
-      {partnerIn ? `${other} is in — swipe away` : `Waiting for ${other} to join…`}
+    <div className={`session-status ${allIn ? 'in' : 'wait'}`} data-testid="session-status" data-all-joined={allIn} data-waiting={waitingNames.length}>
+      {allIn ? `${joinNames(joinedNames)} ${joinedNames.length > 1 ? 'are' : 'is'} in — swipe away` : `Waiting for ${joinNames(waitingNames)} to join…`}
     </div>
   );
 
@@ -377,7 +394,7 @@ function SessionView({ session }: { session: TogetherSession }) {
     <div className="empty-deck" data-testid="session-deck-done">
       <div className="empty-emoji">{session.matches.length ? '🎉' : '🍿'}</div>
       <h2>{session.matches.length ? `${session.matches.length} match${session.matches.length === 1 ? '' : 'es'} so far` : 'No matches yet'}</h2>
-      <p>{partnerIn ? `You are through the deck. ${other} may still be swiping.` : `You are through the deck. ${other} has not joined yet.`}</p>
+      <p>{allIn ? 'You are through the deck. The others may still be swiping.' : `You are through the deck. ${joinNames(waitingNames)} ${waitingNames.length > 1 ? 'have' : 'has'} not joined yet.`}</p>
       {session.matches.length > 0 && (
         <ul className="match-list" data-testid="session-matches">
           {session.matches.map((m) => (
@@ -400,8 +417,8 @@ function SessionView({ session }: { session: TogetherSession }) {
   return (
     <div className="screen with-tabs deckscreen" data-testid="session-deck" data-mode="together" data-session-id={session.id}>
       <Header
-        title="Together"
-        subtitle={summary(session.request).split(' · ').slice(1).join(' · ')}
+        title={session.request.who.length > 2 ? `Together (${session.request.who.length})` : whoLabel(session.request.who, state.members)}
+        subtitle={summary(session.request, state.members).split(' · ').slice(1).join(' · ')}
         left={
           <button type="button" className="icon-btn" aria-label="Back to the questions" data-testid="session-back" onClick={() => setSessionLeft(true)}>
             {Icon.back}
@@ -418,15 +435,15 @@ function SessionView({ session }: { session: TogetherSession }) {
         cards={cards}
         resetKey={session.id}
         save={save}
-        neverText="It will be hidden for you, and out of every Together deck. If you both tap Never it is gone for good."
+        neverText="It will be hidden for you, and out of every Together deck. Once everyone in the household taps Never it is gone for good."
         empty={finished}
         onAction={(sc, action, list) => {
-          void perform({ item: sc.item, pick: sc.card.pick, service: sc.card.service, action, who: 'Together', list, sessionId: session.id });
+          void perform({ item: sc.item, pick: sc.card.pick, service: sc.card.service, action, who: session.request.who, list, sessionId: session.id });
         }}
       />
       {confirmEnd && (
         <Sheet testId="end-sheet" title="End the session?" onClose={() => setConfirmEnd(false)}>
-          <p className="sheet-text">It ends for both phones.</p>
+          <p className="sheet-text">It ends for everyone in it.</p>
           <div className="sheet-options">
             <button type="button" className="sheet-option danger" data-testid="end-confirm" onClick={end}>
               End session

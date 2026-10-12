@@ -17,10 +17,26 @@
  *         + manual corrections (W_CORRECTION each, capped)
  *         - acquired tastes they haven't shown (anime, kids' shows; see taste.nichePenalty)
  *
- * Together: each person is scored separately and blended with a "least
- * misery" rule — mostly the LOWER of the two scores — because a match needs
- * two yeses. A title one of them loves and the other is lukewarm on loses to
- * one they both like.
+ * COLD START. Most people begin with nothing: no favourites, no history. For
+ * them taste, shape and learned are all zero, so the order comes from quality
+ * and familiarity (given extra weight — COLD_QUALITY, COLD_KNOWN — in
+ * proportion to how little we know), the mood, the time and the viewing type.
+ * Two more things happen in proportion to how little is known about the
+ * audience: the deck is spread harder across genres and services (see
+ * diversify), and the seed shuffles more (SEED_JITTER x COLD_JITTER), so two
+ * new households asking the same thing don't get the same thirty cards. How
+ * well we know someone ("sure", 0..1) rises with their favourites (three is
+ * enough to count as an opinion) and with what swipes / an import have taught.
+ *
+ * TWO TO FOUR WATCHERS: each person is scored separately, then blended with a
+ * "least misery" rule (see blend) that leans on the least keen watcher,
+ * because a match needs a yes from everyone. A title one of them loves and
+ * another is lukewarm on loses to one they all like.
+ * "No opinion" is not "dislike": a watcher we know nothing (or little) about
+ * goes along with what the others think of a title instead of dragging
+ * everything down to a flat score (see effectiveOpinions). Their own hard
+ * signals — never-show-me choices, corrections, the acquired-taste mark-down —
+ * still count in full.
  *
  * Mood: when enough titles genuinely fit the requested mood, titles with no
  * fit are dropped outright rather than ranked low.
@@ -51,25 +67,26 @@ import {
   type EngineContext,
   type MoodId,
   type NewArrivals,
+  type MemberId,
   type NewCard,
-  type PersonId,
   type ServiceChoice,
   type SuggestRequest,
   type WatchPick,
   type Who,
 } from '../contracts';
 import { getIndex, sameTitleKey, type CatalogIndex, type ItemInfo } from './catalogIndex';
-import { GENRE_NOUNS } from './phrases';
+import { allOfYou, bothOfYou, GENRE_NOUNS, listNames, namedSubject, possessive } from './phrases';
 import {
   attentionOk,
+  audienceDealbreakers,
+  breaksAny,
   chooseService,
-  hasSeen,
-  hitsDealbreaker,
-  isNeverHidden,
   isNotTonight,
+  neverChecker,
   pickedIds,
   pickFor,
   scaredOffered,
+  seenChecker,
   type PickResult,
 } from './rules';
 import {
@@ -98,8 +115,21 @@ const W_MOOD = 0.4;
 const MOOD_FLOOR = 0.25;
 const W_CORRECTION = 0.3;
 const CORRECTION_CAP = 0.5;
-/** Together: weight on the less keen person's score. */
-const TOGETHER_MIN_WEIGHT = 0.78;
+/**
+ * Blending 2-4 watchers: this much of the result is the LEAST keen watcher's
+ * score, the rest is the average of everyone's (see blend).
+ */
+const LEAST_KEEN = 0.56;
+/** Favourites at which a person counts as having a full opinion of their own. */
+const OPINION_FAVS = 3;
+/** Cold start: extra weight on quality and on being well known, for a person we know nothing about. */
+const COLD_QUALITY = 0.1;
+const COLD_KNOWN = 0.04;
+/** Cold start: how many times larger the seed's shuffle is for an audience we know nothing about (1 + this). */
+const COLD_JITTER = 1.5;
+/** Cold start: how hard a deck is spread across genres / services over its whole length (see diversify). */
+const COLD_GENRE_SPREAD = 0.09;
+const COLD_SERVICE_SPREAD = 0.03;
 /** Mood: drop titles under MOOD_DROP_BELOW when at least MOOD_POOL titles reach MOOD_GOOD. */
 const MOOD_GOOD = 0.4;
 const MOOD_DROP_BELOW = 0.2;
@@ -268,18 +298,53 @@ function noveltyAdjust(item: CatalogItem, seen: boolean, isFav: boolean, req: Su
 // ---------------------------------------------------------------------------
 
 export interface PersonCtx {
-  person: PersonId;
+  person: MemberId;
+  /** The name to use in reasons. Never the id. */
+  name: string;
   fav: FavModel;
   view: LearnedView;
+  /** Favourites count as seen. */
+  seen: (itemId: string) => boolean;
+  /**
+   * 0..1: how well we know this person's taste. 0 = a blank profile (no
+   * favourites, nothing learned); 1 = OPINION_FAVS favourites or more, or
+   * plenty learned from swipes / an import.
+   */
+  sure: number;
 }
 
-export function personCtx(person: PersonId, ctx: EngineContext): PersonCtx {
+export function personCtx(person: MemberId, ctx: EngineContext): PersonCtx {
   const profile = ctx.state.profiles?.[person];
-  return { person, fav: getFavModel(ctx.catalog, profile?.favorites), view: learnedView(profile?.taste) };
+  const fav = getFavModel(ctx.catalog, profile?.favorites);
+  const view = learnedView(profile?.taste);
+  const name = ctx.state.members?.[person]?.name;
+  return {
+    person,
+    name: typeof name === 'string' && name.trim() ? name.trim() : 'Someone',
+    fav,
+    view,
+    seen: seenChecker(person, ctx),
+    sure: clamp(Math.max(fav.favs.length / OPINION_FAVS, view.evidence)),
+  };
+}
+
+/** 0..1: how little is known about the audience as a whole. If anyone watching has a taste we know, it can steer. */
+export function audienceCold(people: PersonCtx[]): number {
+  let known = 0;
+  for (const p of people) if (p.sure > known) known = p.sure;
+  return 1 - known;
+}
+
+interface Parts {
+  /** Taste + shape + learning, already weighted: this person's OPINION of the title. 0 = none. */
+  opinion: number;
+  /** Corrections and the acquired-taste mark-down: applied outside the mood scaling, never borrowed from anyone else. */
+  corr: number;
+  isFav: boolean;
 }
 
 /** Taste + learning + corrections for one person; the request-independent half. */
-function tasteParts(info: ItemInfo, p: PersonCtx, index: CatalogIndex): { taste: number; shape: number; learned: number; corr: number; isFav: boolean } {
+function tasteParts(info: ItemInfo, p: PersonCtx, index: CatalogIndex): Parts {
   const isFav = p.fav.favIds.has(info.item.id);
   // Their own favourite is to their taste whatever anyone else rated it; for everything
   // else, resemblance counts only as far as the title's rating can be trusted.
@@ -291,19 +356,79 @@ function tasteParts(info: ItemInfo, p: PersonCtx, index: CatalogIndex): { taste:
   if (delta < 0) learned = Math.min(0, learned);
   else if (delta > 0) learned = Math.max(0, learned);
   return {
-    taste,
-    shape: isFav ? 0 : traitFit(info, p.fav),
-    learned,
+    opinion: W_TASTE * taste + W_SHAPE * (isFav ? 0 : traitFit(info, p.fav)) + W_LEARN * learned,
     corr: clamp(W_CORRECTION * delta, -CORRECTION_CAP, CORRECTION_CAP) + nichePenalty(info, p.fav, p.view),
     isFav,
   };
 }
 
-function blend(scores: number[]): number {
-  if (scores.length === 1) return scores[0];
-  const lo = Math.min(...scores);
-  const hi = Math.max(...scores);
-  return TOGETHER_MIN_WEIGHT * lo + (1 - TOGETHER_MIN_WEIGHT) * hi;
+/**
+ * "NO OPINION" IS NEUTRAL, NOT DISLIKE. For a watcher we know well (sure = 1)
+ * the opinion used is their own. For a watcher we know little about, having
+ * nothing to say about a title must not count as being unhappy with it — or a
+ * newcomer would flatten every deck they join, and the people we do know
+ * would stop getting anything to their taste. So their opinion is topped up
+ * towards what the OTHER watchers think of the title (the average of the
+ * others' opinions, each weighted by how well we know them), by the share we
+ * don't know them: effective = max(own, (1 - sure) x others).
+ *  - A blank newcomer (sure 0) simply goes along with the rest.
+ *  - Someone with one favourite (sure 1/3) keeps their own view where they
+ *    have one and goes two-thirds of the way along otherwise.
+ *  - A NEGATIVE opinion (they've been swiping this kind of thing away) is
+ *    always kept as it is.
+ * With one watcher, or when everyone is well known, nothing changes.
+ */
+function effectiveOpinions(parts: Parts[], people: PersonCtx[]): number[] {
+  const out = new Array<number>(parts.length);
+  for (let k = 0; k < parts.length; k++) {
+    const own = parts[k].opinion;
+    const unsure = 1 - people[k].sure;
+    if (unsure <= 0 || own < 0 || parts.length === 1) {
+      out[k] = own;
+      continue;
+    }
+    let sum = 0;
+    let weight = 0;
+    for (let j = 0; j < parts.length; j++) {
+      if (j === k) continue;
+      sum += people[j].sure * parts[j].opinion;
+      weight += people[j].sure;
+    }
+    out[k] = Math.max(own, weight > 0 ? unsure * (sum / weight) : 0);
+  }
+  return out;
+}
+
+/**
+ * LEAST MISERY FOR ANY NUMBER OF WATCHERS.
+ *
+ *     blend = LEAST_KEEN x (lowest score) + (1 - LEAST_KEEN) x (average score)
+ *
+ * With LEAST_KEEN = 0.56 the least keen watcher carries
+ *     2 watchers: 78%   3 watchers: 71%   4 watchers: 67%
+ * of the result, and everyone else shares the rest equally.
+ *
+ * Why this shape: everyone has to say yes for a match, so the person who
+ * likes a title least matters most — a title one watcher would hate sinks,
+ * however much the others love it. But the bigger the group, the more often
+ * SOMEONE is merely lukewarm, and a pure "lowest score wins" would then rank
+ * everything by whoever is hardest to please and offer four people nothing
+ * but bland compromises. Keeping the average in the mix means three people's
+ * enthusiasm still lifts a title the fourth is only neutral about over one
+ * nobody feels anything for, while a real objection still outweighs it.
+ * For two watchers it is exactly the rule the ranking was tuned with
+ * (0.78 x lower + 0.22 x higher).
+ */
+export function blend(scores: number[]): number {
+  const n = scores.length;
+  if (n === 1) return scores[0];
+  let lo = scores[0];
+  let sum = 0;
+  for (const x of scores) {
+    if (x < lo) lo = x;
+    sum += x;
+  }
+  return LEAST_KEEN * lo + (1 - LEAST_KEEN) * (sum / n);
 }
 
 // ---------------------------------------------------------------------------
@@ -324,14 +449,17 @@ interface ReasonInput {
 export function buildReasons({ info, people, req, pick, moodRaw }: ReasonInput): string[] {
   const item = info.item;
   const out: { text: string; w: number }[] = [];
-  const solo = people.length === 1;
+  const n = people.length;
+  const solo = n === 1;
+  const lovers = (favId: string) => people.filter((p) => p.fav.favIds.has(favId));
 
   // 1. It IS a favourite.
-  const favOf = people.filter((p) => p.fav.favIds.has(item.id));
+  const favOf = lovers(item.id);
   if (favOf.length) {
     if (solo) out.push({ text: 'One of your favourites', w: 2 });
-    else if (favOf.length === people.length) out.push({ text: 'A favourite for both of you', w: 2 });
-    else out.push({ text: `One of ${favOf[0].person}'s favourites`, w: 1.6 });
+    else if (favOf.length === n) out.push({ text: `A favourite for ${bothOfYou(n)}`, w: 2 });
+    else if (favOf.length === 1) out.push({ text: `One of ${possessive(favOf[0].name)} favourites`, w: 1.6 });
+    else out.push({ text: `A favourite for ${listNames(favOf.map((p) => p.name))}`, w: 1.8 });
   }
 
   // 2. It resembles favourites.
@@ -345,24 +473,28 @@ export function buildReasons({ info, people, req, pick, moodRaw }: ReasonInput):
     if (m.length >= 2 && m[1].sim >= m[0].sim * 0.7) out.push({ text: `Like ${m[0].title} and ${m[1].title}`, w: 0.6 + m[0].sim });
     else if (m.length) out.push({ text: `Because you love ${m[0].title}`, w: 0.55 + m[0].sim });
   } else {
-    // A favourite they share is the most persuasive thing we can say to two people.
+    // A favourite they ALL share is the most persuasive thing we can say to a group.
     let sharedBest: FavMatch | null = null;
     for (const q of per) {
       for (const x of q.m) {
-        if (per.every((o) => o.p.fav.favIds.has(x.favId)) && (!sharedBest || x.sim > sharedBest.sim)) sharedBest = x;
+        if (lovers(x.favId).length === n && (!sharedBest || x.sim > sharedBest.sim)) sharedBest = x;
       }
     }
-    if (sharedBest) out.push({ text: `Because you both love ${sharedBest.title}`, w: 0.7 + sharedBest.sim });
+    if (sharedBest) out.push({ text: `Because ${allOfYou(n)} love ${sharedBest.title}`, w: 0.7 + sharedBest.sim });
+    // Then, for each watcher, the favourite of theirs it most resembles — naming everyone who loves that one.
     for (const q of per) {
-      const m = q.m.find((x) => x.favId !== sharedBest?.favId && !per.every((o) => o.p.fav.favIds.has(x.favId)));
-      if (m) out.push({ text: `Because ${q.p.person} loves ${m.title}`, w: 0.45 + m.sim });
+      const m = q.m.find((x) => x.favId !== sharedBest?.favId && lovers(x.favId).length < n);
+      if (!m) continue;
+      const fans = lovers(m.favId).map((p) => p.name);
+      if (fans.length >= 2) out.push({ text: `Because ${namedSubject(fans)} love ${m.title}`, w: 0.55 + m.sim });
+      else out.push({ text: `Because ${q.p.name} loves ${m.title}`, w: 0.45 + m.sim });
     }
   }
 
   // 3. They asked for more of this / have been saying yes to this.
   for (const p of people) {
     for (const g of item.genres) {
-      if (p.view.corrected.genres.get(g) === 1) out.push({ text: `You asked for more ${GENRE_NOUNS[g]}`, w: 0.8 });
+      if (p.view.corrected.genres.get(g) === 1) out.push({ text: `${solo ? 'You' : p.name} asked for more ${GENRE_NOUNS[g]}`, w: 0.8 });
       else if (solo && !p.view.corrected.genres.has(g) && p.view.genre(g) >= 0.25) {
         // Say where the opinion came from: their watch history, or their swipes.
         const fromHistory = p.view.imported.genre(g) > p.view.genre(g) / 2;
@@ -418,14 +550,25 @@ export function buildDeck(req: SuggestRequest, ctx: EngineContext, opts: DeckOpt
   // Rule 2: a scared request from an audience that isn't offered it gets nothing.
   if (req.mood === 'scared' && !scaredOffered(req.who, ctx)) return [];
 
+  const who = req.who;
+  if (!watchers(who).length) return []; // nobody watching
+
   const index = getIndex(ctx.catalog);
   const seed = opts.seed ?? 0;
   const exclude = opts.exclude?.length ? new Set(opts.exclude) : null;
-  const who = req.who;
   const people = watchers(who).map((p) => personCtx(p, ctx));
   const plans = ctx.state.settings?.plans;
   const timeLimit = TIME_LIMIT_MINUTES[req.time] ?? 0;
   const picked = pickedIds(who, ctx);
+  // The per-audience rules, worked out once rather than once per title.
+  const breakers = audienceDealbreakers(who, ctx);
+  const neverHidden = neverChecker(who, ctx);
+  const anyNotTonight = watchers(who).some((p) => {
+    const map = ctx.state.notTonight?.[p];
+    return !!map && Object.keys(map).length > 0;
+  });
+  const cold = audienceCold(people);
+  const jitterSize = seed !== 0 ? SEED_JITTER * (1 + COLD_JITTER * cold) : 0;
 
   const cands: Candidate[] = [];
   let goodMood = 0;
@@ -437,11 +580,11 @@ export function buildDeck(req: SuggestRequest, ctx: EngineContext, opts: DeckOpt
     // ---- hard rules (cheapest first); mirrors rules.isEligible ----
     if (exclude?.has(id)) continue;
     if (!attentionOk(item, req)) continue; // rule 3
-    if (hitsDealbreaker(item, who, ctx)) continue; // rule 2
-    if (isNeverHidden(id, who, ctx)) continue; // rule 7
-    if (isNotTonight(id, who, ctx)) continue;
-    if (picked.has(id)) continue; // already on the Matches tab
-    const seenFlags = people.map((p) => hasSeen(p.person, id, ctx));
+    if (breaksAny(item, breakers)) continue; // rule 2
+    if (neverHidden(id)) continue; // rule 7
+    if (anyNotTonight && isNotTonight(id, who, ctx)) continue;
+    if (picked.has(id)) continue; // rule 8: already on the Matches tab
+    const seenFlags = people.map((p) => p.seen(id));
     const seenAny = seenFlags.includes(true);
     if (req.novelty === 'new' && seenAny) continue; // rule 5
     if (req.novelty === 'rewatch' && !seenAny) continue; // rule 5
@@ -455,14 +598,16 @@ export function buildDeck(req: SuggestRequest, ctx: EngineContext, opts: DeckOpt
     const shared =
       W_QUALITY * info.quality + W_POP * info.pop + W_LENGTH * lengthFit(item, pick.minutes, req) + W_FORMAT * formatFit(item, req);
     const moodMul = MOOD_FLOOR + (1 - MOOD_FLOOR) * mood.eff;
+    const coldLift = COLD_QUALITY * info.quality + COLD_KNOWN * info.pop;
+    const parts = people.map((p) => tasteParts(info, p, index));
+    const opinions = effectiveOpinions(parts, people);
     const plain: number[] = [];
     const scores = people.map((p, k) => {
-      const t = tasteParts(info, p, index);
-      const base = W_TASTE * t.taste + W_SHAPE * t.shape + W_LEARN * t.learned + shared;
-      plain.push(base * moodMul + W_MOOD * mood.eff + t.corr);
-      return plain[k] + noveltyAdjust(item, seenFlags[k], t.isFav, req);
+      const base = opinions[k] + shared + (1 - p.sure) * coldLift;
+      plain.push(base * moodMul + W_MOOD * mood.eff + parts[k].corr);
+      return plain[k] + noveltyAdjust(item, seenFlags[k], parts[k].isFav, req);
     });
-    const jitter = seed !== 0 ? (hash01(seed, id) - 0.5) * SEED_JITTER : 0;
+    const jitter = jitterSize ? (hash01(seed, id) - 0.5) * jitterSize : 0;
     const score = blend(scores) + jitter;
     const merit = seenAny ? blend(plain) + jitter : score;
 
@@ -476,7 +621,7 @@ export function buildDeck(req: SuggestRequest, ctx: EngineContext, opts: DeckOpt
 
   const byScore = (a: Candidate, b: Candidate) => b.score - a.score || (a.info.item.id < b.info.item.id ? -1 : 1);
   const deal = (sorted: Candidate[], max: number, startAt: number): Candidate[] =>
-    req.novelty === 'either' ? dealEither(sorted, max, startAt, seed, index) : diversify(sorted, max, index);
+    req.novelty === 'either' ? dealEither(sorted, max, startAt, seed, index, cold) : diversify(sorted, max, index, cold);
 
   let ordered: Candidate[];
   if (req.genre) {
@@ -544,12 +689,24 @@ function oneEach(sorted: Candidate[]): Candidate[] {
  * title after marking down those too similar to the last few chosen. The
  * mark-downs are small, so this only reshuffles titles that were close anyway —
  * it can never lift a poor title over a good one.
+ *
+ * COLD START (`cold` > 0: little or nothing is known about the audience).
+ * Without taste to tell titles apart, the best-rated titles for a mood tend to
+ * be the same kind of thing, and the deck would be thirty prestige crime
+ * dramas. So, in proportion to `cold`, each candidate is also marked down by
+ * how much of the deck SO FAR already shares its genres (rarer genres counting
+ * for more) and its service — a pull towards an even spread over the whole
+ * deck, not just the last few cards. For an audience we know, `cold` is 0 and
+ * this does nothing: their taste decides.
  */
-function diversify(sorted: Candidate[], limit: number, index: CatalogIndex): Candidate[] {
+function diversify(sorted: Candidate[], limit: number, index: CatalogIndex, cold = 0): Candidate[] {
   const pool = sorted.slice(0, Math.max(limit * 4, 120));
   const out: Candidate[] = [];
   let run = 0; // how many of the latest picks in a row are the same kind (film / series)
   const WINDOW = 5;
+  const genreCount = new Map<string, number>();
+  const serviceCount = new Map<string, number>();
+  const reach = 0.35 + cold * (COLD_GENRE_SPREAD + COLD_SERVICE_SPREAD);
   while (out.length < limit && pool.length) {
     let bestK = 0;
     let bestAdj = Number.NEGATIVE_INFINITY;
@@ -557,8 +714,16 @@ function diversify(sorted: Candidate[], limit: number, index: CatalogIndex): Can
     const head = pool[0].score;
     for (let k = 0; k < pool.length; k++) {
       const c = pool[k];
-      if (c.score < head - 0.35) break;
+      if (c.score < head - reach) break;
       let adj = c.score;
+      if (cold > 0 && out.length) {
+        // Share of the deck so far that already has each of this title's genres, rarer genres counting for more.
+        const dealt = Math.max(out.length, 4);
+        let crowd = 0;
+        for (const g of c.info.item.genres) crowd += index.genreWeight(g) * ((genreCount.get(g) ?? 0) / dealt);
+        if (c.info.genreWeightSum > 0) adj -= cold * COLD_GENRE_SPREAD * Math.min(1, crowd / c.info.genreWeightSum);
+        adj -= cold * COLD_SERVICE_SPREAD * Math.min(1, (serviceCount.get(c.service.serviceId) ?? 0) / dealt);
+      }
       let decay = 1;
       for (let j = out.length - 1; j >= 0 && j >= out.length - WINDOW; j--) {
         adj -= decay * alike(c, out[j], index);
@@ -574,6 +739,10 @@ function diversify(sorted: Candidate[], limit: number, index: CatalogIndex): Can
     const [chosen] = pool.splice(bestK, 1);
     run = out.length && out[out.length - 1].info.item.kind === chosen.info.item.kind ? run + 1 : 1;
     out.push(chosen);
+    if (cold > 0) {
+      for (const g of chosen.info.item.genres) genreCount.set(g, (genreCount.get(g) ?? 0) + 1);
+      serviceCount.set(chosen.service.serviceId, (serviceCount.get(chosen.service.serviceId) ?? 0) + 1);
+    }
   }
   return out;
 }
@@ -581,7 +750,7 @@ function diversify(sorted: Candidate[], limit: number, index: CatalogIndex): Can
 /**
  * "EITHER" = A LEAN TOWARDS NEW. The deck is the deck of NEW titles, with one
  * card in every REWATCH_EVERY (ten) given over to something a watcher has
- * already seen (Together: either of them).
+ * already seen (with several watching: any of them).
  *
  *  - Where: one slot per run of ten cards, somewhere in the middle of the run
  *    (never the first two cards or the last one), so rewatches are spread
@@ -601,12 +770,12 @@ function diversify(sorted: Candidate[], limit: number, index: CatalogIndex): Can
  * craving filler tier starts part-way down), so slots are counted across the
  * whole deck. Input is best-first, already de-duplicated and mood-filtered.
  */
-function dealEither(sorted: Candidate[], limit: number, startAt: number, seed: number, index: CatalogIndex): Candidate[] {
+function dealEither(sorted: Candidate[], limit: number, startAt: number, seed: number, index: CatalogIndex, cold: number): Candidate[] {
   const fresh: Candidate[] = [];
   const seenBefore: Candidate[] = [];
   for (const c of sorted) (c.seen ? seenBefore : fresh).push(c);
-  if (!fresh.length) return diversify(seenBefore, limit, index);
-  const freshDeck = diversify(fresh, limit, index);
+  if (!fresh.length) return diversify(seenBefore, limit, index, cold);
+  const freshDeck = diversify(fresh, limit, index, cold);
   if (!seenBefore.length) return freshDeck;
 
   const bar = fresh[Math.min(fresh.length, REWATCH_BAR_DEPTH) - 1].score - REWATCH_SLACK;
@@ -668,27 +837,32 @@ function alike(a: Candidate, b: Candidate, index: CatalogIndex): number {
  * `following[k]` = person k already watches this show and this is news about it.
  */
 export function feedScore(info: ItemInfo, people: PersonCtx[], index: CatalogIndex, following: boolean[]): number {
-  const scores = people.map((p, k) => {
-    const t = tasteParts(info, p, index);
-    return W_TASTE * t.taste + W_SHAPE * t.shape + W_LEARN * t.learned + W_QUALITY * info.quality + W_POP * info.pop + t.corr + (following[k] ? 0.12 : 0);
-  });
+  const parts = people.map((p) => tasteParts(info, p, index));
+  const opinions = effectiveOpinions(parts, people);
+  const coldLift = COLD_QUALITY * info.quality + COLD_KNOWN * info.pop;
+  const scores = people.map(
+    (p, k) => opinions[k] + W_QUALITY * info.quality + W_POP * info.pop + (1 - p.sure) * coldLift + parts[k].corr + (following[k] ? 0.12 : 0),
+  );
   return round4(blend(scores));
 }
 
 /**
  * Recent arrivals, ranked by taste. No mood or time limits apply. Kept only if
- * the title is in the catalog, on our plans, clear of dealbreakers and Never,
+ * the title is in the catalog, on our plans, clear of everyone's never-show-me choices and Never,
  * not already on the Matches tab (and not swiped "not tonight" today). Titles a watcher has already seen are
  * dropped unless the arrival is a new season. If a title is listed twice, the
  * first (newest) entry wins.
  */
 export function rankNewArrivals(arrivals: NewArrivals, who: Who, ctx: EngineContext): NewCard[] {
+  if (!watchers(who).length) return [];
   const index = getIndex(ctx.catalog);
   const people = watchers(who).map((p) => personCtx(p, ctx));
   const plans = ctx.state.settings?.plans;
   const done = new Set<string>();
   const cards: NewCard[] = [];
   const picked = pickedIds(who, ctx);
+  const breakers = audienceDealbreakers(who, ctx);
+  const neverHidden = neverChecker(who, ctx);
 
   for (const arrival of arrivals?.entries ?? []) {
     const info = index.byId.get(arrival.itemId);
@@ -696,11 +870,11 @@ export function rankNewArrivals(arrivals: NewArrivals, who: Who, ctx: EngineCont
     const item = info.item;
     const service = chooseService(item, plans);
     if (!service) continue;
-    if (hitsDealbreaker(item, who, ctx)) continue;
-    if (isNeverHidden(item.id, who, ctx)) continue;
+    if (breaksAny(item, breakers)) continue;
+    if (neverHidden(item.id)) continue;
     if (isNotTonight(item.id, who, ctx)) continue;
     if (picked.has(item.id)) continue;
-    const seenFlags = people.map((p) => hasSeen(p.person, item.id, ctx));
+    const seenFlags = people.map((p) => p.seen(item.id));
     const isSeason = arrival.type === 'season';
     if (seenFlags.includes(true) && !isSeason) continue;
     // A new season is about the new episodes, so don't point at an old standout episode.

@@ -1,7 +1,17 @@
 /**
- * THE "WHAT IT HAS LEARNED" PAGE: turns a profile into 8-16 plain sentences,
- * strongest first. Each line has a stable key ('genre:comedy',
- * 'keyword:sitcom', 'trait:dropIn') that a manual correction can be pinned to.
+ * THE "WHAT IT HAS LEARNED" PAGE: turns a profile into plain sentences,
+ * strongest first — 8-16 of them for someone the app knows well. Each line has
+ * a stable key ('genre:comedy', 'keyword:sitcom', 'trait:dropIn') that a
+ * manual correction can be pinned to.
+ *
+ * It only ever says what it has grounds for, so it reads sensibly at every stage:
+ *  - nothing known (no favourites, no swipes, no import): just the two
+ *    acquired tastes that are held back for everyone until they show interest
+ *    (anime, kids' shows), said plainly, so there is something to tap "more" on;
+ *  - one favourite: the same — one title is not a pattern;
+ *  - two to four favourites: what they have in common, in measured words
+ *    ("You lean towards…", "You're drawn to…"), never "You love…";
+ *  - a long list, swipes or an import: the full page.
  *
  * Strength combines what the favourites have in common with what swipes and
  * an imported watch history have taught; a manual correction overrides all of
@@ -20,6 +30,14 @@ const QUOTA: Record<string, number> = { genre: 6, keyword: 7, trait: 3 };
 const LEARNED_GAIN = 1.6;
 /** The same for what a watch-history import taught (its weights top out at 0.5, so a line from it alone reaches about 0.6). */
 const IMPORTED_GAIN = 1.2;
+/**
+ * How strongly a handful of favourites may speak: with fewer than three, what
+ * they share is at most a lean; with fewer than five, at most "drawn to".
+ */
+const FEW_FAVS_CAP: [favs: number, cap: number][] = [
+  [3, 0.4],
+  [5, 0.58],
+];
 /** Traits worth stating from favourites alone (the rest only appear once swipes say so). */
 const FAVOURITE_TRAITS = ['dropIn', 'serialized', 'short', 'hourlong', 'kind:movie'];
 
@@ -45,6 +63,18 @@ function sentence(phrase: string, strength: number, source: TasteInsight['source
   return `You lean towards ${phrase}`;
 }
 
+/**
+ * The line for an acquired taste that is being held back. With a few favourites
+ * to point at it says so; with none (or one) it just states the default.
+ */
+function heldBackText(niche: NicheId, nFav: number): string {
+  const label = NICHES[niche].label;
+  const few = niche === 'kids' ? 'very few of them' : 'very little of it';
+  if (nFav >= 2) return `None of your favourites are ${label}, so you'll see ${few}`;
+  const Label = label.charAt(0).toUpperCase() + label.slice(1);
+  return niche === 'kids' ? `${Label} are held back until you show you like them` : `${Label} is held back until you show you like it`;
+}
+
 export function describeTaste(profile: Profile, catalog: Catalog): TasteInsight[] {
   const index = getIndex(catalog);
   const fav = getFavModel(catalog, profile.favorites);
@@ -62,24 +92,27 @@ export function describeTaste(profile: Profile, catalog: Catalog): TasteInsight[
   // ---- what the favourites have in common ----
   const nFav = fav.favs.length;
   if (nFav >= 2) {
+    let cap = 1;
+    for (const [favs, c] of FEW_FAVS_CAP) if (nFav < favs) cap = Math.min(cap, c);
     for (const [g, share] of fav.genreShare) {
-      if (share * nFav >= 2) draft(`genre:${g}`, 'genre').fromFavs = clamp(0.2 + 0.9 * share);
+      // (Rounded: 2 of 3 must count as two, whatever the division left behind.)
+      if (Math.round(share * nFav) >= 2) draft(`genre:${g}`, 'genre').fromFavs = Math.min(cap, clamp(0.2 + 0.9 * share));
     }
     for (const [k, count] of fav.kwCount) {
       // Rarer themes say more about a person than ones half the catalog shares.
-      if (count >= 2) draft(`keyword:${k}`, 'keyword').fromFavs = clamp(0.18 + 0.9 * (count / nFav) + 0.2 * index.kwWeight(k));
+      if (count >= 2) draft(`keyword:${k}`, 'keyword').fromFavs = Math.min(cap, clamp(0.18 + 0.9 * (count / nFav) + 0.2 * index.kwWeight(k)));
     }
     for (const t of FAVOURITE_TRAITS) {
       const share = fav.traitShare.get(t) ?? 0;
       const needed = t === 'kind:movie' ? 0.3 : 0.5;
-      if (share >= needed) draft(`trait:${t}`, 'trait').fromFavs = clamp(0.1 + 0.6 * share);
+      if (share >= needed) draft(`trait:${t}`, 'trait').fromFavs = Math.min(cap, clamp(0.1 + 0.6 * share));
     }
   }
 
   // ---- acquired tastes the favourites don't include (held back until shown otherwise) ----
   const heldBack = new Map<string, NicheId>();
   for (const n of Object.keys(NICHES) as NicheId[]) {
-    if (fav.niches.has(n) || nFav === 0) continue;
+    if (fav.niches.has(n)) continue;
     const d = draft(NICHES[n].key, n === 'anime' ? 'keyword' : 'genre');
     d.fromFavs = -0.3;
     heldBack.set(d.key, n);
@@ -126,7 +159,7 @@ export function describeTaste(profile: Profile, catalog: Catalog): TasteInsight[
     const held = heldBack.get(d.key);
     const text =
       held && !correction && source === 'favorites' && strength < 0
-        ? `None of your favourites are ${NICHES[held].label}, so you'll see very little of it`
+        ? heldBackText(held, nFav)
         : sentence(phrase, strength, source, correction, d.imported > Math.abs(d.learned) ? (d.kind === 'trait' ? 'habit' : 'theme') : 'no');
     lines.push({ key: d.key, kind: d.kind, text, strength: round4(strength), source, correction });
   }

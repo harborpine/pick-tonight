@@ -1,8 +1,8 @@
 import { useRef, useState } from 'react';
-import type { ImportResult, ParsedHistory, PersonId } from '../contracts';
+import type { ImportResult, MemberId, ParsedHistory } from '../contracts';
 import { Icon, Sheet } from './components';
 import { useApp } from './context';
-import { formatCount } from './helpers';
+import { formatCount, nameOf } from './helpers';
 
 type Stage =
   | { kind: 'idle' }
@@ -36,9 +36,10 @@ function afterPaint(): Promise<void> {
 const plays = (n: number) => `${formatCount(n)} ${n === 1 ? 'play' : 'plays'}`;
 
 /** "Import what you've watched": read a file or pasted list, show a summary, and only then save. */
-export function ImportSection({ person }: { person: PersonId }) {
-  const { services, state, me, toast } = useApp();
-  const { engine, sync, catalog } = services;
+export function ImportSection({ memberId }: { memberId: MemberId }) {
+  const { services, state, me, toast, ensureCatalog } = useApp();
+  const { engine, sync } = services;
+  const person = nameOf(state.members, memberId);
   const [stage, setStage] = useState<Stage>({ kind: 'idle' });
   const [paste, setPaste] = useState('');
   const [confirmPartner, setConfirmPartner] = useState(false);
@@ -47,7 +48,7 @@ export function ImportSection({ person }: { person: PersonId }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const busy = useRef(false);
 
-  const forMe = person === me;
+  const forMe = memberId === me;
   const owner = forMe ? 'my' : `${person}’s`;
 
   const run = async (read: () => Promise<string>, fileName: string, what: string) => {
@@ -101,7 +102,7 @@ export function ImportSection({ person }: { person: PersonId }) {
       for (let i = 0; i < matched.length; i += CHUNK) {
         const part = matched.slice(i, i + CHUNK);
         await sync.markWatched(
-          person,
+          memberId,
           part.map((m) => ({
             itemId: m.entry.id,
             at: m.lastWatched,
@@ -113,7 +114,8 @@ export function ImportSection({ person }: { person: PersonId }) {
         setStage({ kind: 'saving', done: Math.min(i + CHUNK, matched.length), total: matched.length });
         await afterPaint();
       }
-      const profile = sync.getState()?.profiles[person] ?? state.profiles[person];
+      const catalog = await ensureCatalog();
+      const profile = sync.getState()?.profiles[memberId] ?? state.profiles[memberId];
       await sync.saveProfile(engine.learnFromImport(profile, matched, catalog));
       setStage({ kind: 'done', added: matched.length });
       toast('Added to History');
@@ -130,7 +132,7 @@ export function ImportSection({ person }: { person: PersonId }) {
   };
 
   return (
-    <section className="block import" data-testid="import-section" data-person={person}>
+    <section className="block import" data-testid="import-section" data-member-id={memberId}>
       <h2>Import what you&rsquo;ve watched</h2>
 
       {stage.kind === 'idle' && (
@@ -217,7 +219,7 @@ export function ImportSection({ person }: { person: PersonId }) {
           person={person}
           owner={owner}
           stage={stage}
-          knownIds={state.seen[person] ?? {}}
+          knownIds={state.seen[memberId] ?? {}}
           unmatchedOpen={unmatchedOpen}
           unmatchedShown={unmatchedShown}
           onToggleUnmatched={() => setUnmatchedOpen((o) => !o)}
@@ -252,7 +254,7 @@ export function ImportSection({ person }: { person: PersonId }) {
       {confirmPartner && (stage.kind === 'summary' || stage.kind === 'failed') && (
         <Sheet testId="import-partner-sheet" title={`Add to ${person}’s History?`} onClose={() => setConfirmPartner(false)}>
           <p className="sheet-text" data-testid="import-partner-text">
-            This phone is {me}&rsquo;s. These {formatCount(stage.result.matched.length)} titles will go into <strong>{person}&rsquo;s</strong> History and
+            This phone is {nameOf(state.members, me)}&rsquo;s. These {formatCount(stage.result.matched.length)} titles will go into <strong>{person}&rsquo;s</strong> History and
             change {person}&rsquo;s suggestions, not yours. Only do this if the file is {person}&rsquo;s.
           </p>
           <div className="sheet-options">
@@ -289,7 +291,7 @@ function Summary({
   onCancel,
   onAdd,
 }: {
-  person: PersonId;
+  person: string;
   owner: string;
   stage: { kind: 'summary' | 'failed'; parsed: ParsedHistory; result: ImportResult };
   knownIds: Record<string, unknown>;

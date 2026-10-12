@@ -1,61 +1,98 @@
 # Sync (Firebase layout)
 
-`createSync({mode:'firebase'})` -> `firebase.ts`. `createSync({mode:'memory'})` -> `memory.ts` (one device, localStorage).
-Shared pure logic: `match.ts` (match decision), `assemble.ts` (documents -> `SharedState`), `pairing.ts` (codes), `errors.ts` (plain-language messages).
+`createSync({mode:'firebase'})` -> `firebase.ts`. `createSync({mode:'memory'})` -> `memory.ts` (one device, localStorage; never imports the Firebase SDK).
+Shared pure logic: `match.ts` (N-person match decision), `assemble.ts` (documents -> `SharedState`), `pairing.ts` (invite codes, name rules), `seen.ts` (watched-list helpers), `errors.ts` (plain-language messages).
+Project: `pick-tonight-5tkr8` (never the private app's project). Anonymous sign-in must be enabled in the Firebase console.
 
-## Firestore documents
+## Who is a member
+
+There is no sign-in. Each phone has an anonymous Firebase identity (`uid`). `households/{hid}` holds:
 
 ```
-households/{hid}                 members: { <uid>: {person, at} }, createdAt, lastJoinCode   (not listened to)
-households/{hid}/data/shared     profiles.{HG,BG}, settings, never.{P}.{itemId}=ms, notTonight.{P}.{itemId}=date,
-                                 watchlist.{list__itemId}=entry
-households/{hid}/data/seen_HG    m.{itemId}=ms   THE LEGACY NUMBER MAP, unchanged since version 1 (still written by the new app)
-households/{hid}/data/seen_BG
-households/{hid}/seenx/{HG_0..HG_7, BG_0..BG_7}   e.{itemId}=JSON string of a SeenEntry (source, plays, snapshot); NEW in v2
-households/{hid}/months/{YYYY-MM}  entries.{pickId}=PickEntry   (the pick log, one doc per month; called "history" in v1, same documents)
-households/{hid}/sessions/{id}   the open Together session (deck, joined, yes, passed, matches); deleted when it ends
-pairingCodes/{CODE}              hid, person (who made it), createdBy, createdAt (server time), used, usedBy
+nextId     next member number (m1, m2, ... never reused)
+members    { m1: {name, joinedAt}, ... }            1..4
+names      { "n:<lower-cased name>": "m1", ... }    makes names unique (case-insensitive) in a way rules can check
+owners     { m1: <uid of the phone that IS m1> }    absent = nobody's phone (after "unpair")
+uids       { <uid>: "m1" }                          reverse index used by the rules
+inviteCode the most recent invite (maybe used/expired)
+deleting   true while "Delete everything" runs
 ```
 
-A phone listens to 6 things: `shared`, `seen_HG`, `seen_BG`, the whole `seenx` collection (up to 16 small docs), ALL `months` documents, and open `sessions`.
-State is pushed to subscribers only after all six have answered once (cache or server), and updates are coalesced over 25 ms (one server change arrives as several listener callbacks).
+A phone counts as a member only while `owners[uids[uid]] == uid`. Taking a member over from a new phone sets `owners[m] = newUid`, so the old phone is locked out instantly (its entry in `uids` goes stale and any live member tidies it away).
 
-All edits are field-level (`set` with merge / `updateDoc` with paths, `arrayUnion`, `deleteField`), so two phones editing different things never overwrite each other.
+## Documents
 
-## Version 2 data shapes and compatibility (read this before changing storage)
+```
+households/{hid}                 see above (listened to: this is how a phone learns it was removed / the household was deleted)
+households/{hid}/data/shared     settings, ours.{itemId} = JSON WatchlistEntry
+households/{hid}/data/{m1..}     one per member: profile, never.{id}=ms, notTonight.{id}=date, watch.{id}=JSON WatchlistEntry
+households/{hid}/seenx/{m1_0..m1_7}   e.{itemId} = JSON SeenEntry   (8 shards per member; the only copy of a watched list)
+households/{hid}/months/{YYYY-MM}     entries.{pickId} = JSON PickEntry  (the Matches tab, one doc per month)
+households/{hid}/sessions/current     the one open Together session (deleted when it ends; `id` field tells sessions apart)
+invites/{CODE}                   hid, createdBy, createdAt(server), used, usedBy, members[{id,name}], full, nextId
+```
 
-**Watched titles (`SharedState.seen`).** A title is "watched" iff it is a key of `seen_{P}.m`; its value there is still a plain number (`at`), exactly as the first app version wrote it. The new details (source / plays / snapshot) are in `seenx`, sharded by a fixed hash of the title id (`shardOf`, never change it). Reading merges the two: `at` from `m`, the rest from `seenx`; a title with no details is `{at, source:'manual'}` (this is how every v1 entry is read, forever). Details whose title is no longer in `m` are ignored (that is what happens when the old app un-marks a title). Why details are one JSON string per title: a nested map would cost ~6 of Firestore's 40,000 index entries per document per title; a string costs 2. Why separate shard documents: 1 MiB per document.
+Titles, picks and watchlist entries are stored as one JSON string each: a string is one indexed value, whereas a nested map would use many of Firestore's 40,000 index entries per document, and the rules only need to count them.
 
-**Picks (`SharedState.picks`).** Same `months/{YYYY-MM}` documents and the same entry fields as v1's history. Solo picks get the fixed id `solo-{who}-{itemId}` (two phones adding the same title at once make one entry); matches keep `match-{sessionId}-{itemId}`. `removePick` finds the month document that holds the entry (any month) and deletes the field. There is no cap and no time window any more: every month document is listened to (about one tiny document per month of use); the list stays small because people remove picks.
+A phone listens to 5 things: the household doc, the `data` collection, `seenx`, `months`, `sessions`. State is published once all five have answered once (cache or server) and updates are coalesced over 25 ms.
+Every edit is field-level (`set` merge / `updateDoc` of one path / `arrayUnion` / `deleteField`) so two phones editing different things never overwrite each other. Match decisions and membership changes use transactions.
 
-**What a phone still running the v1 app experiences once the new app has written data:** it reads `seen_*.m` (numbers, kept up to date by the new app) and `months` (same shape), and never looks at `seenx`. So: titles marked/imported on the new app appear as seen on the old one (without source/plays/snapshot, which v1 never had); titles un-marked on the new app disappear there; picks added on the new app show in the old History tab as before (solo/match lines) and picks removed on the new app disappear from it (v1 only showed the newest 300 of the last 12 months anyway). The old app's own writes (numbers, history lines) are understood by the new app. Things v1 cannot know: the new "any" time choice in a Together request (the old app's engine has no limit for it and may misbehave on a Together deck started from a new phone), and imported titles it never saw. Nothing is lost or corrupted in either direction. `firestore.rules` already allows members to read/write anything under their household, so no rules change was needed.
+## Invites and joining
 
-**Limits.** Per person: at most 19,500 watched titles (`SEEN_MAX`). Measured on the live project: the legacy number map holds 19,900 titles and fails at 20,100 ("too many index entries", Firestore's 40,000-per-document limit, 2 per title). Details: ~150 bytes per title spread over 8 shard documents (about 3 MB for 20,000 titles in total, ~370 KB per shard). A 12,000-title import took ~12 s end to end.
+* `createInvite()` (transaction): deletes the previous invite doc, creates `invites/{CODE}` (6 chars, 24 h by server time) carrying a snapshot of member ids/names, `full` and `nextId`, and points `household.inviteCode` at it. One live invite per household; making a new one replaces it.
+* `previewInvite(code)`: anyone signed in may `get` one invite by its exact code (no listing). The snapshot is refreshed by every rename/removal (same transaction). When the code is used the snapshot is cleared. An expired, unused invite keeps its snapshot until the household makes another invite or is deleted (a stranger would need the exact code AND for it to be more than a day old).
+* `joinWithCode`: ONE batch = mark the invite used + update the household. The rules check (server side): the invite is this household's current one, unused, younger than 24 h; for a new member the id is exactly `m<nextId>`, there is room (<4), the name is 1..20 chars and not already taken, and only this uid is added; for a re-claim only `owners[m]`/`uids[uid]` change. A new member's profile is written right after (they are a member by then).
+* Re-claim ("I'm already a member"): the old phone's `uids` entry goes stale; its listeners get "permission denied", it checks the household and goes to `unpaired` with "This phone is no longer part of the household..." (or "This household was deleted." when the household document is gone).
 
-**`markWatched` / `unmarkWatched` writes.** Chunks of 1,000 titles, each chunk one atomic batch (details shards + the number map together; ~250 KB per request, far below the ~10 MiB request limit and the 500-operation batch limit). Up to 25 titles it behaves like every other edit (resolves at once; problems show in `device.error`). Bigger calls wait for the server: if a chunk is refused the promise rejects with a plain sentence saying how many titles were saved ("N of M titles were saved. Run it again to finish; nothing will be doubled."). Earlier chunks stay saved and are consistent; re-running writes the same values again. Offline: if the first chunk is not confirmed within 8 s, the rest is queued on the phone (the on-device cache applies it immediately) and the call resolves; it uploads by itself when the connection returns and any later refusal shows in `device.error` instead of rejecting.
+## Leaving and deleting
 
-## Pairing and security (`firestore.rules`)
+* `unpair()`: this phone forgets the household (and takes a new anonymous identity); the member and data stay and can be claimed again with an invite.
+* `removeMember(m)`: deletes the member's `data/m`, their 8 `seenx` shards (and the session if they are in its audience), then removes them from the household in one transaction. 'ours' and matches stay. Removing yourself unpairs this phone; removing the last member runs `deleteHousehold()`.
+* `deleteHousehold()` (needs a connection): sets `deleting:true` (rules then refuse every write except deletes, so nothing can sneak in), deletes the outstanding invite, deletes every doc of `data`, `seenx`, `months`, `sessions` in batches of 10 (re-listing from the server until a pass finds nothing), then deletes the household document and resolves only when the server confirms. Other phones go to `unpaired` with "This household was deleted.". (A non-existent household document can be `get`-ed, so a phone can tell "deleted" from "removed".)
 
-- Members only for everything under `households/{hid}`; the household document itself cannot be listed.
-- First phone creates the household (it is the only member). It makes a code (`pairingCodes/{CODE}`, 6 characters from a 31-letter alphabet, no 0/O/1/I/L).
-- Second phone reads that one code document (get by exact name; codes cannot be listed) to learn the household id, then writes ONE batch: mark the code used + add its own uid to `members`. The rules allow the member-map change only if that same batch marks a valid (same household, unused, under 15 minutes old by SERVER time) code as used by this uid, and the joiner is not the same person as the code's maker.
-- Up to 8 device slots. After joining, a phone removes older slots held by the same person (a phone iOS wiped).
-- `unpair()` removes this phone's slot (best effort) and forgets the pairing locally.
-- Anyone on the internet can sign in anonymously and create their own separate household; they cannot see ours.
-- Brute-forcing a code: there are ~887 million codes, only one or two exist for 15 minutes at a time, and each guess is one request.
+## Security rules (`firestore.rules`)
 
-## Together sessions
+* Only live member uids can read or write anything under a household. Nothing is listable (households, invites, ...). Any path not named below is denied.
+* Outsiders: read one invite by exact code; perform the validated join batch. Nothing else.
+* Caps enforced by rules: 4 members, names 1..20 chars (on create/join), member numbers <= 999, `uids` <= 16, watched shard <= 2,500 titles, month doc <= 1,500 picks, per-member never <= 3,000 / notTonight <= 1,500 / watchlist <= 1,000, `ours` <= 1,000, 40 favourites, 400 learned keywords, 400 deck cards, 4 session members; only these document ids are allowed (`shared`, `m<n>`, `m<n>_<0-7>`, `YYYY-MM`, `current`), so a household has a bounded number of documents. Every document is also bounded by Firestore's own 1 MiB limit.
+* Known rule limits: renaming an existing member is length-checked by the app, not by the rules (a member can only affect their own household); name uniqueness uses the lower-cased name (a few non-English capital letters may lower-case differently in the rules and in JavaScript, which would refuse that join rather than allow a duplicate); string values inside maps are not individually size-checked.
 
-- `startSession` writes the session (and deletes the one it replaces) in one batch; not blocked offline.
-- A "pass" is an `arrayUnion` write (works offline). A "yes" runs a Firestore transaction on the session doc that applies `decideSwipe`, so even simultaneous yeses produce exactly one match and one pick entry (pick id is `match-{sessionId}-{itemId}`). Transactions need a connection; offline they fail after ~20 s with a plain message.
-- Deck cap: 400 cards (a card is ~0.4 KB, so a full session is far below 1 MB).
+## Residual abuse / cost risk (honest)
 
-## Free-tier estimate (Spark: 50k reads, 20k writes per day)
+Firestore rules cannot rate-limit. Anyone with the public app can sign in anonymously and create many households, and fill each one up to the caps above. The worst case is exhausting the free daily quota (50k reads, 20k writes, 20k deletes) or the 1 GiB of storage: the app then becomes read-only/unavailable (the phone shows "very busy today ... try again tomorrow") until the quota resets (storage does not reset). Nobody's data is exposed by this. Cheap mitigations already in: bounded documents per household (about 280 at most), caps above, 10-document delete batches, 1000-title write chunks, and a 10,000 watched titles per person ceiling. Future options: Firebase App Check (not added now), a cleanup job for idle households, tightening per-collection caps.
 
-Opening the app: ~5 reads plus the seenx shards (up to 16) and one per month of picks (0-1 session) plus rule lookups of the household doc. With the offline cache, re-opening often costs only changed documents.
-A typical Together evening (60 swipes by each phone): ~120 swipe writes plus ~60 rule reads, ~20 more writes for saves/watched/picks. Roughly 300 writes and 1,000 reads per evening, around 2% of the daily limits.
+## Quota handling
+
+`resource-exhausted` from any call becomes `MSG.quota` ("<app name> is very busy today and has hit its free limit. Your lists are safe - please try again tomorrow."). Listener errors set `device.error` and keep the app running from the offline cache; actions that need the server (create, invite, join, rename, remove, delete, matches) reject with that message; queued background edits report it in `device.error`.
+
+## Free-tier usage estimate (Spark: 50k reads / 20k writes / 20k deletes per day, 1 GiB)
+
+Assumptions: a 2-person household, one evening: both phones open the app ~3 times (cold start with the offline cache = reads only for changed docs, about 4 + listener docs when nothing changed; worst case full re-read ~ 15 docs), 1 Together session of ~25 swipes each, 2 solo right-swipes, a couple of watchlist/seen edits.
+* Reads: ~2 phones x 3 opens x ~15 docs = 90, plus every change reaches the other phone as one doc read (~60 swipes/edits) = ~150; add ~1 rule lookup read per write (~100) => about 250-300 reads / household / evening.
+* Writes: ~25 passes + ~25 yes (transaction) + ~10 other edits, x1 per swipe = ~70, +1 match month write => about 70-100 writes.
+* So the writes quota (20k) is the limit: ~200 households could each have a heavy evening on the same day; with typical use (a quarter of that) ~800 active households per day. Reads (50k) support ~170 heavy / ~600 typical evenings. Reasonable planning figure: 150-250 households active on the same day, many hundreds in total.
+* Storage: a typical household (2 people, 300 watched titles each, a few picks) is ~150-250 KB => ~4,000+ households in 1 GiB; a heavy household (4 people, 5,000 titles each) is ~4 MB => ~250.
+* One-time costs: creating a household = ~5 writes; an import of 3,000 titles = 3 batches / ~24 writes; "Delete everything" = one delete per document (~10-60) plus a small number of reads.
 
 ## Known limits
 
-- If BOTH phones lose their anonymous identity (iOS storage wipe on both), nobody can open the household any more; the data is orphaned and a new household must be made.
-- Code expiry is enforced by the server, so it cannot be unit-tested; `pairing.ts` has the same rule for display.
+* A watched list holds at most 10,000 titles per person; a household can have members m1..m999 over its lifetime.
+* One outstanding invite per household. A full household can still make an invite (for re-claiming a place).
+* Sessions: one per household; starting a new one replaces it. Passed swipes are not transactional (a swipe racing a brand-new session may land in the new one and is ignored by the UI).
+* If a phone's browser storage is wiped it gets a new identity and must re-claim its member with an invite. A person alone with no other member to invite them back loses their lists in that case (the app says so).
+* Offline: edits are queued and shown at once; creating, inviting, joining, renaming, removing, deleting and Together matches need a connection and say so.
+
+## Memory mode (development and tests)
+
+Same API; one device, localStorage key `pick.memory-sync.v2`. A second phone is impossible, so `createSync({mode:'memory'})` returns a `MemorySyncApi` with two extra, debug-only helpers (the UI's debug hooks and e2e tests use them):
+
+* `debugAddMember(name, profile)` -> new member id. Adds a member without an invite (same rules: max 4, unique name).
+* `debugActAs(memberId)`: this device now acts as that member (`getDevice().memberId` changes), so a test can swipe as each person in turn.
+
+`createInvite()` returns a real-looking code; `previewInvite`/`joinWithCode` work against codes made on the same device (joining switches this device to the new / re-claimed member). `unpair()` keeps the household in storage (as the server would); `deleteHousehold()` wipes it.
+
+## Tests
+
+* `npx vitest run src/sync`: unit tests (assembly for 1-4 members, N-person match logic, invites and names, error mapping, memory mode).
+* `npm run test:sync`: integration against the real project (needs anonymous sign-in enabled). Fresh households each run, deleted at the end.
+* Deploy rules: `npx firebase-tools deploy --only firestore:rules --project pick-tonight-5tkr8 --non-interactive`.

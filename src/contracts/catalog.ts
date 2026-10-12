@@ -76,7 +76,6 @@ export const SERVICES: ServiceDef[] = [
   { id: 'shudder', name: 'Shudder', plans: [{ id: 'standard', label: 'Shudder', adFree: true, providerIds: [99] }] },
   { id: 'criterion', name: 'Criterion Channel', plans: [{ id: 'standard', label: 'Criterion Channel', adFree: true, providerIds: [258] }] },
   { id: 'mubi', name: 'MUBI', plans: [{ id: 'standard', label: 'MUBI', adFree: true, providerIds: [11] }] },
-  { id: 'acorn', name: 'Acorn TV', plans: [{ id: 'standard', label: 'Acorn TV', adFree: true, providerIds: [87] }] },
   { id: 'sundance', name: 'Sundance Now', plans: [{ id: 'standard', label: 'Sundance Now', adFree: true, providerIds: [143] }] },
   { id: 'hidive', name: 'HIDIVE', plans: [{ id: 'standard', label: 'HIDIVE', adFree: true, providerIds: [430] }] },
   { id: 'kanopy', name: 'Kanopy (free with a library card)', plans: [{ id: 'library', label: 'Library card', adFree: true, providerIds: [191] }] },
