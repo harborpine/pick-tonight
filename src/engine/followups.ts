@@ -36,7 +36,7 @@
 import { watchers, type EngineContext, type FollowUp, type Who } from '../contracts';
 import { getIndex, sameTitleKey } from './catalogIndex';
 import { allOfYou, namedSubject, possessive } from './phrases';
-import { buildReasons, feedScore, personCtx, type PersonCtx } from './rank';
+import { buildReasons, feedScore, watching, type PersonCtx } from './rank';
 import { audienceDealbreakers, breaksAny, chooseService, isNotTonight, neverChecker, pickedIds, pickFor, watchedAt } from './rules';
 
 /** A new season is news for this long after it starts... */
@@ -67,12 +67,12 @@ export function followUps(who: Who, ctx: EngineContext): FollowUp[] {
   if (!audience.length) return [];
   const today = dayNumber(ctx.today);
   const index = getIndex(ctx.catalog);
-  const people = audience.map((p) => personCtx(p, ctx));
+  const people = watching(who, ctx);
   const plans = ctx.state.settings?.plans;
   const picked = pickedIds(who, ctx);
   const breakers = audienceDealbreakers(who, ctx);
   const neverHidden = neverChecker(who, ctx);
-  const together = audience.length > 1;
+  const together = people.length > 1;
   const out: Ranked[] = [];
   const done = new Set<string>();
 
@@ -91,7 +91,7 @@ export function followUps(who: Who, ctx: EngineContext): FollowUp[] {
     return null;
   };
   /** "you both" / "all three of you" when it is everyone watching, otherwise their names. */
-  const whoWatched = (fans: PersonCtx[]): string => (fans.length === audience.length ? allOfYou(audience.length) : namedSubject(fans.map((p) => p.name)));
+  const whoWatched = (fans: PersonCtx[]): string => (fans.length === people.length ? allOfYou(people.length) : namedSubject(fans.map((p) => p.name)));
 
   for (const info of index.infos) {
     const item = info.item;
@@ -157,7 +157,7 @@ export function followUps(who: Who, ctx: EngineContext): FollowUp[] {
         const fav = fans.some((p) => p.fav.favIds.has(id));
         const latest = Math.max(0, ...fans.map((p) => watchedAt(p.person, id, ctx) ?? 0));
         // Watched by more of them (everyone, ideally) > a favourite > the most recently watched > one we can name > listed first.
-        const rank = (16 * fans.length) / audience.length + (fav ? 4 : 0) + (titleOf(id) ? 1 : 0) + latest / 1e14 - order / 1e6;
+        const rank = (16 * fans.length) / people.length + (fav ? 4 : 0) + (titleOf(id) ? 1 : 0) + latest / 1e14 - order / 1e6;
         if (!best || rank > best.rank) best = { id, fans, rank };
       });
       const parent = best as { id: string; fans: PersonCtx[] } | null;
@@ -181,7 +181,7 @@ export function followUps(who: Who, ctx: EngineContext): FollowUp[] {
           pick: pick.pick,
           service,
           minutes: pick.minutes,
-          score: feedScore(info, people, index, audience.map(() => false)),
+          score: feedScore(info, people, index, people.map(() => false)),
           reasons: buildReasons({ info, people, req: null, pick: pick.pick, moodRaw: 0 }),
           type: 'spinoff',
           becauseItemId: parent.id,

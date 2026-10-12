@@ -28,6 +28,7 @@ import {
   type CatalogItem,
   type CatalogManifest,
   type EngineContext,
+  type FavoriteTitle,
   type MemberId,
   type PlanSelection,
   type SuggestRequest,
@@ -99,6 +100,31 @@ if (dataDir) {
 
 const engine = createEngine();
 const byId = new Map(catalog.items.map((i) => [i.id, i]));
+
+/** The broad title lookup, when it sits next to the catalog (used to find the sample favourites, and for the import trial). */
+const indexPath = dataDir && existsSync(join(dirname(resolve(dataDir)), TITLE_INDEX_PATH)) ? join(dirname(resolve(dataDir)), TITLE_INDEX_PATH) : '';
+const titleIndex: TitleIndex = indexPath ? (JSON.parse(readFileSync(indexPath, 'utf8')) as TitleIndex) : FIXTURE_TITLE_INDEX;
+
+/**
+ * The sample people's favourites are written against the sample catalog, whose
+ * ids are made up. Against real data, find each favourite BY NAME, as a person
+ * would by searching: in the lookup (most popular title of that name and kind)
+ * or the catalog. One that can't be found keeps the data it carries, under an
+ * id that cannot collide with a real title.
+ */
+function relink(favorites: FavoriteTitle[]): FavoriteTitle[] {
+  if (!dataDir) return favorites;
+  const norm = (t: string) => t.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  return favorites.map((f) => {
+    const hits = titleIndex.titles.filter((t) => t.kind === f.kind && norm(t.title) === norm(f.title)).sort((a, b) => b.popularity - a.popularity);
+    const hit = hits[0];
+    if (hit) return { id: hit.id, kind: hit.kind, title: hit.title, year: hit.year, genres: hit.genres, keywords: hit.keywords ?? [], poster: hit.poster ?? null };
+    const item = catalog.items.find((i) => i.kind === f.kind && norm(i.title) === norm(f.title));
+    if (item) return { id: item.id, kind: item.kind, title: item.title, year: item.year, genres: item.genres, keywords: item.keywords, poster: null };
+    return { ...f, id: `${f.kind}-sample-${norm(f.title).replace(/ /g, '-')}` };
+  });
+}
+
 console.log(`Catalog: ${catalog.items.length} titles, built ${catalog.builtAt}; plans ${JSON.stringify(plans)}\n`);
 
 // ---------------------------------------------------------------------------
@@ -110,7 +136,20 @@ interface Persona {
   who: Who;
   ctx: EngineContext;
 }
-const household = (members: MemberId[]): EngineContext => makeCtx({ catalog, plans, members });
+const household = (members: MemberId[]): EngineContext => {
+  const ctx = makeCtx({ catalog, plans, members });
+  for (const m of members) ctx.state.profiles[m].favorites = relink(ctx.state.profiles[m].favorites);
+  return ctx;
+};
+if (dataDir) {
+  const all = household(['alex', 'sam', 'dee']);
+  for (const m of ['alex', 'sam', 'dee']) {
+    const favs = all.state.profiles[m].favorites;
+    const inCatalog = favs.filter((f) => byId.has(f.id)).length;
+    const lost = favs.filter((f) => f.id.includes('-sample-')).map((f) => f.title);
+    console.log(`${m}: ${favs.length} favourites found by name, ${inCatalog} of them in this household's catalog${lost.length ? `; not found anywhere: ${lost.join(', ')}` : ''}`);
+  }
+}
 const soloNew = household(['kit']);
 const soloFew = household(['dee']);
 // (dee's sample never-show-me choices are about the rules, not about taste: leave them out here.)
@@ -226,6 +265,7 @@ console.log('   ' + engine.onboardingTitles(catalog, plans, 24).map((i) => i.tit
   // A lived-in household: besides their favourites, each has seen a good slice of the well-known titles.
   const known = engine.onboardingTitles(catalog, plans, 400).map((i) => i.id);
   const lived = makeCtx({ catalog, plans, members: ['alex', 'sam', 'kit'], seen: { alex: known.filter((_, k) => k % 3 === 0), sam: known.filter((_, k) => k % 3 === 1), kit: known.filter((_, k) => k % 3 === 2) } });
+  for (const m of ['alex', 'sam']) lived.state.profiles[m].favorites = relink(lived.state.profiles[m].favorites);
   const either: SuggestRequest[] = [
     { ...A('background', 'laugh', 20, 'either'), who: ['alex'] },
     { ...A('focused', 'gripped', 60, 'either'), who: ['alex'] },
@@ -289,9 +329,6 @@ console.log('   ' + engine.onboardingTitles(catalog, plans, 24).map((i) => i.tit
 // Watch-history import
 // ---------------------------------------------------------------------------
 {
-  const guess = dataDir ? join(dirname(resolve(dataDir)), TITLE_INDEX_PATH) : '';
-  const indexPath = guess && existsSync(guess) ? guess : '';
-  const titleIndex: TitleIndex = indexPath ? (JSON.parse(readFileSync(indexPath, 'utf8')) as TitleIndex) : FIXTURE_TITLE_INDEX;
   console.log(`=== Import trial: sample Netflix history against ${indexPath || 'the sample lookup (no titles.json found)'} (${titleIndex.titles.length} titles)`);
   const text = sampleNetflixHistory();
   let t0 = performance.now();

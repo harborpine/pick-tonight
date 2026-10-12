@@ -43,6 +43,8 @@ export interface ItemInfo {
   trust: number;
   /** Engine-defined traits, e.g. 'dropIn', 'kind:movie', 'short'. */
   traits: string[];
+  /** sameTitleKey(item), worked out once (it is needed for every candidate of every deck). */
+  titleKey: string;
 }
 
 export interface CatalogIndex {
@@ -115,7 +117,11 @@ export function nichesOf(t: { kind: TitleKind; genres?: GenreId[]; keywords?: st
   if ((t.keywords ?? []).some((k) => ANIME_KEYWORDS.has(k)) || (genres.includes('animation') && t.attention === 'high')) out.push('anime');
   if (
     t.kind === 'tv' &&
-    (genres.includes('kids') || KIDS_CERTS.has(t.certification ?? '') || (t.certification === 'TV-G' && genres.includes('family')))
+    (genres.includes('kids') ||
+      KIDS_CERTS.has(t.certification ?? '') ||
+      (t.certification === 'TV-G' && genres.includes('family')) ||
+      // All-ages cartoons rated a notch up (TV-PG) — but not grown-up animated sitcoms that happen to be tagged "family".
+      (t.certification === 'TV-PG' && genres.includes('family') && genres.includes('animation') && !(t.keywords ?? []).includes('adult animation')))
   ) {
     out.push('kids');
   }
@@ -213,6 +219,7 @@ function build(catalog: Catalog): CatalogIndex {
       niches,
       trust: clamp(0.5 + (bayes - TRUST_POOR) / (2 * (TRUST_FINE - TRUST_POOR)), 0.5, 1) * (TRUST_UNPROVEN + (1 - TRUST_UNPROVEN) * (votes / (votes + TRUST_VOTES))),
       traits: traitsOf(item, builtYear),
+      titleKey: sameTitleKey(item),
     };
   });
   const byId = new Map(infos.map((i) => [i.item.id, i]));

@@ -17,13 +17,19 @@ const W_KW = 0.44;
 const W_GENRE = 0.18;
 const W_RELATED = 0.3;
 const W_FORMAT = 0.08;
+/**
+ * A favourite picked by search may come with no keywords at all (the broad
+ * title lookup only has them for some titles). Its genres are then everything
+ * we know about it, so they stand in for the missing themes: genre overlap
+ * counts for this much instead of W_GENRE. (Less than W_KW + W_GENRE, because
+ * sharing a genre is weaker evidence than sharing themes.)
+ */
+const W_GENRE_ALONE = 0.4;
 /** Resemblance below this is noise ("it's also a drama") and is ignored. */
 const SIM_FLOOR = 0.14;
 /** The best match counts fully, then each further favourite it resembles adds less. */
 const MULTI_WEIGHTS = [1, 0.6, 0.4, 0.25];
 const MULTI_NORM = 1.55;
-/** Someone with a single favourite can only ever resemble one: don't mark them down for having no second match. */
-const MULTI_NORM_SINGLE = 1;
 /** A person's own favourite is, by definition, to their taste. */
 export const OWN_FAVOURITE_TASTE = 0.92;
 
@@ -105,6 +111,8 @@ export interface FavModel {
   favIds: Set<string>;
   /** The favourites, one entry per title. */
   favs: FavCore[];
+  /** How many of them tell us anything (have a genre or a keyword). A bare title we know nothing about is not an opinion. */
+  informative: number;
   /** 0..1 resemblance to the favourites, per catalog item (by ItemInfo.idx). */
   score: Float32Array;
   /**
@@ -183,7 +191,6 @@ function favInfo(core: FavCore, index: CatalogIndex): FavInfo {
 function buildFavModel(index: CatalogIndex, favorites: readonly FavoriteTitle[]): FavModel {
   const infos = favInfos(index, favorites);
   const favIds = new Set(infos.map((f) => f.core.id));
-  const norm = infos.length === 1 ? MULTI_NORM_SINGLE : MULTI_NORM;
 
   const support = supportOf(infos);
   const n = index.infos.length;
@@ -203,7 +210,7 @@ function buildFavModel(index: CatalogIndex, favorites: readonly FavoriteTitle[])
     for (let k = 0; k < sims.length && k < MULTI_WEIGHTS.length; k++) {
       total += MULTI_WEIGHTS[k] * ((sims[k].s - SIM_FLOOR) / (1 - SIM_FLOOR));
     }
-    score[info.idx] = clamp((total / norm) * formatSupport(info, support));
+    score[info.idx] = clamp((total / MULTI_NORM) * formatSupport(info, support));
     matches[info.idx] = sims
       .filter((x) => x.named)
       .slice(0, 3)
@@ -241,7 +248,7 @@ function buildFavModel(index: CatalogIndex, favorites: readonly FavoriteTitle[])
     for (const [t, share] of index.traitShare) traitLift.set(t, ((traitShare.get(t) ?? 0) - share) * sure);
   }
 
-  return { favIds, favs: infos.map((f) => f.core), score, matches, genreShare, kwCount, traitShare, traitLift, niches };
+  return { favIds, favs: infos.map((f) => f.core), informative: infos.filter((f) => f.kw.size + f.genres.size > 0).length, score, matches, genreShare, kwCount, traitShare, traitLift, niches };
 }
 
 function supportOf(favInfos: FavInfo[]): Support {
@@ -343,7 +350,8 @@ function similarityParts(info: ItemInfo, f: FavInfo, index: CatalogIndex, suppor
   }
 
   const named = kwPlain + genrePlain >= NAME_MIN_EVIDENCE && (genrePlain > 0 || kwPlain >= NAME_KEYWORDS_ALONE);
-  return { sim: clamp(W_KW * kw + W_GENRE * genre + W_RELATED * rel + W_FORMAT * format), kw, genre, rel, format, named, sharedKw };
+  const sim = f.kw.size ? W_KW * kw + W_GENRE * genre + W_RELATED * rel + W_FORMAT * format : W_GENRE_ALONE * genre + W_RELATED * rel + W_FORMAT * format;
+  return { sim: clamp(sim), kw, genre, rel, format, named, sharedKw };
 }
 
 /** Development aid (used by dev/review.ts): why a title does or doesn't resemble each favourite. */

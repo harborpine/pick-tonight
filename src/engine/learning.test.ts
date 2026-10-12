@@ -182,7 +182,7 @@ describe('learnFromSwipe', () => {
 });
 
 describe('describeTaste (the "what it has learned" page)', () => {
-  it('gives 8-16 plain-language lines for each seeded profile, strongest first', () => {
+  it('gives 8-16 plain-language lines for each well-known profile, strongest first', () => {
     for (const p of ['alex', 'sam']) {
       const lines = engine.describeTaste(sampleProfile(p), C);
       expect(lines.length).toBeGreaterThanOrEqual(8);

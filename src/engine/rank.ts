@@ -24,9 +24,16 @@
  * Two more things happen in proportion to how little is known about the
  * audience: the deck is spread harder across genres and services (see
  * diversify), and the seed shuffles more (SEED_JITTER x COLD_JITTER), so two
- * new households asking the same thing don't get the same thirty cards. How
- * well we know someone ("sure", 0..1) rises with their favourites (three is
- * enough to count as an opinion) and with what swipes / an import have taught.
+ * new households asking the same thing don't get the same thirty cards.
+ * With no favourites to go on, what swipes and an import have taught is also
+ * given more say (W_LEARN_COLD), so the first signals a new person gives
+ * visibly change their deck.
+ * Two measures of a person, both 0..1, both rising with favourites and with
+ * what has been learned:
+ *   "known" — how much we know about their taste. Full at KNOWN_FAVS (8)
+ *             favourites. Everything above fades out as it rises.
+ *   "sure"  — whether they have an opinion of their own at all. Full at
+ *             OPINION_FAVS (3). Used when blending a group (below).
  *
  * TWO TO FOUR WATCHERS: each person is scored separately, then blended with a
  * "least misery" rule (see blend) that leans on the least keen watcher,
@@ -82,6 +89,7 @@ import {
   breaksAny,
   chooseService,
   isNotTonight,
+  isSubtitled,
   neverChecker,
   pickedIds,
   pickFor,
@@ -122,13 +130,25 @@ const CORRECTION_CAP = 0.5;
 const LEAST_KEEN = 0.56;
 /** Favourites at which a person counts as having a full opinion of their own. */
 const OPINION_FAVS = 3;
+/** Favourites at which we count a person's taste as well known (the same length at which a list is "long", see taste.ts). */
+const KNOWN_FAVS = 8;
+/** Extra weight on what swipes / an import have taught, for someone with no favourites (fades out by OPINION_FAVS). */
+const W_LEARN_COLD = 0.25;
 /** Cold start: extra weight on quality and on being well known, for a person we know nothing about. */
 const COLD_QUALITY = 0.1;
 const COLD_KNOWN = 0.04;
+/**
+ * Cold start: a small mark-down (worth about one point of rating) for titles not originally in English, for a person we know nothing
+ * about. Ratings and vote counts are worldwide, so a show that is huge in its own country can look
+ * like a sure thing for someone who has never heard of it and would have to read subtitles; the
+ * truly famous ones (which are also very widely rated) still come through. Fades out as we get to
+ * know the person, and is quite separate from the "nothing subtitled" never-show-me choice.
+ */
+const COLD_SUBTITLED = 0.1;
 /** Cold start: how many times larger the seed's shuffle is for an audience we know nothing about (1 + this). */
 const COLD_JITTER = 1.5;
 /** Cold start: how hard a deck is spread across genres / services over its whole length (see diversify). */
-const COLD_GENRE_SPREAD = 0.09;
+const COLD_GENRE_SPREAD = 0.18;
 const COLD_SERVICE_SPREAD = 0.03;
 /** Mood: drop titles under MOOD_DROP_BELOW when at least MOOD_POOL titles reach MOOD_GOOD. */
 const MOOD_GOOD = 0.4;
@@ -306,11 +326,15 @@ export interface PersonCtx {
   /** Favourites count as seen. */
   seen: (itemId: string) => boolean;
   /**
-   * 0..1: how well we know this person's taste. 0 = a blank profile (no
+   * 0..1: do they have an opinion of their own? 0 = a blank profile (no
    * favourites, nothing learned); 1 = OPINION_FAVS favourites or more, or
    * plenty learned from swipes / an import.
    */
   sure: number;
+  /** 0..1: how much we know about their taste. 1 = KNOWN_FAVS favourites or more, or plenty learned. */
+  known: number;
+  /** The weight what they have taught us carries: W_LEARN, plus W_LEARN_COLD while they have no favourites. */
+  learnWeight: number;
 }
 
 export function personCtx(person: MemberId, ctx: EngineContext): PersonCtx {
@@ -324,14 +348,28 @@ export function personCtx(person: MemberId, ctx: EngineContext): PersonCtx {
     fav,
     view,
     seen: seenChecker(person, ctx),
-    sure: clamp(Math.max(fav.favs.length / OPINION_FAVS, view.evidence)),
+    sure: clamp(Math.max(fav.informative / OPINION_FAVS, view.evidence)),
+    known: clamp(Math.max(fav.informative / KNOWN_FAVS, view.evidence)),
+    learnWeight: W_LEARN + W_LEARN_COLD * (1 - clamp(fav.informative / OPINION_FAVS)),
   };
+}
+
+/**
+ * The watchers, in the household's own order (who joined first), which is the
+ * order names are listed in ("Alex, Sam and Kit"). Scoring does not depend on
+ * the order.
+ */
+export function watching(who: Who, ctx: EngineContext): PersonCtx[] {
+  const joined = (id: MemberId) => ctx.state.members?.[id]?.joinedAt ?? Number.MAX_SAFE_INTEGER;
+  return [...new Set(watchers(who))]
+    .sort((a, b) => joined(a) - joined(b) || (a < b ? -1 : a > b ? 1 : 0))
+    .map((p) => personCtx(p, ctx));
 }
 
 /** 0..1: how little is known about the audience as a whole. If anyone watching has a taste we know, it can steer. */
 export function audienceCold(people: PersonCtx[]): number {
   let known = 0;
-  for (const p of people) if (p.sure > known) known = p.sure;
+  for (const p of people) if (p.known > known) known = p.known;
   return 1 - known;
 }
 
@@ -356,7 +394,7 @@ function tasteParts(info: ItemInfo, p: PersonCtx, index: CatalogIndex): Parts {
   if (delta < 0) learned = Math.min(0, learned);
   else if (delta > 0) learned = Math.max(0, learned);
   return {
-    opinion: W_TASTE * taste + W_SHAPE * (isFav ? 0 : traitFit(info, p.fav)) + W_LEARN * learned,
+    opinion: W_TASTE * taste + W_SHAPE * (isFav ? 0 : traitFit(info, p.fav)) + p.learnWeight * learned,
     corr: clamp(W_CORRECTION * delta, -CORRECTION_CAP, CORRECTION_CAP) + nichePenalty(info, p.fav, p.view),
     isFav,
   };
@@ -556,7 +594,7 @@ export function buildDeck(req: SuggestRequest, ctx: EngineContext, opts: DeckOpt
   const index = getIndex(ctx.catalog);
   const seed = opts.seed ?? 0;
   const exclude = opts.exclude?.length ? new Set(opts.exclude) : null;
-  const people = watchers(who).map((p) => personCtx(p, ctx));
+  const people = watching(who, ctx);
   const plans = ctx.state.settings?.plans;
   const timeLimit = TIME_LIMIT_MINUTES[req.time] ?? 0;
   const picked = pickedIds(who, ctx);
@@ -598,12 +636,12 @@ export function buildDeck(req: SuggestRequest, ctx: EngineContext, opts: DeckOpt
     const shared =
       W_QUALITY * info.quality + W_POP * info.pop + W_LENGTH * lengthFit(item, pick.minutes, req) + W_FORMAT * formatFit(item, req);
     const moodMul = MOOD_FLOOR + (1 - MOOD_FLOOR) * mood.eff;
-    const coldLift = COLD_QUALITY * info.quality + COLD_KNOWN * info.pop;
+    const coldLift = COLD_QUALITY * info.quality + COLD_KNOWN * info.pop - (isSubtitled(item) ? COLD_SUBTITLED : 0);
     const parts = people.map((p) => tasteParts(info, p, index));
     const opinions = effectiveOpinions(parts, people);
     const plain: number[] = [];
     const scores = people.map((p, k) => {
-      const base = opinions[k] + shared + (1 - p.sure) * coldLift;
+      const base = opinions[k] + shared + (1 - p.known) * coldLift;
       plain.push(base * moodMul + W_MOOD * mood.eff + parts[k].corr);
       return plain[k] + noveltyAdjust(item, seenFlags[k], parts[k].isFav, req);
     });
@@ -677,7 +715,7 @@ function dropPoorMood(cands: Candidate[], goodCount: number, mood: MoodId): Cand
 function oneEach(sorted: Candidate[]): Candidate[] {
   const seen = new Set<string>();
   return sorted.filter((c) => {
-    const key = sameTitleKey(c.info.item);
+    const key = c.info.titleKey;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -705,6 +743,7 @@ function diversify(sorted: Candidate[], limit: number, index: CatalogIndex, cold
   let run = 0; // how many of the latest picks in a row are the same kind (film / series)
   const WINDOW = 5;
   const genreCount = new Map<string, number>();
+  const mainCount = new Map<string, number>();
   const serviceCount = new Map<string, number>();
   const reach = 0.35 + cold * (COLD_GENRE_SPREAD + COLD_SERVICE_SPREAD);
   while (out.length < limit && pool.length) {
@@ -721,7 +760,12 @@ function diversify(sorted: Candidate[], limit: number, index: CatalogIndex, cold
         const dealt = Math.max(out.length, 4);
         let crowd = 0;
         for (const g of c.info.item.genres) crowd += index.genreWeight(g) * ((genreCount.get(g) ?? 0) / dealt);
-        if (c.info.genreWeightSum > 0) adj -= cold * COLD_GENRE_SPREAD * Math.min(1, crowd / c.info.genreWeightSum);
+        // Half on all its genres (rarer ones counting for more), half on its MAIN genre alone:
+        // "another drama" is what a run of cards looks like to the person swiping.
+        const main = c.info.item.genres[0];
+        const all = c.info.genreWeightSum > 0 ? crowd / c.info.genreWeightSum : 0;
+        const first = main ? (mainCount.get(main) ?? 0) / dealt : 0;
+        adj -= cold * COLD_GENRE_SPREAD * Math.min(1, 0.5 * all + 0.5 * first);
         adj -= cold * COLD_SERVICE_SPREAD * Math.min(1, (serviceCount.get(c.service.serviceId) ?? 0) / dealt);
       }
       let decay = 1;
@@ -741,6 +785,8 @@ function diversify(sorted: Candidate[], limit: number, index: CatalogIndex, cold
     out.push(chosen);
     if (cold > 0) {
       for (const g of chosen.info.item.genres) genreCount.set(g, (genreCount.get(g) ?? 0) + 1);
+      const main = chosen.info.item.genres[0];
+      if (main) mainCount.set(main, (mainCount.get(main) ?? 0) + 1);
       serviceCount.set(chosen.service.serviceId, (serviceCount.get(chosen.service.serviceId) ?? 0) + 1);
     }
   }
@@ -839,9 +885,9 @@ function alike(a: Candidate, b: Candidate, index: CatalogIndex): number {
 export function feedScore(info: ItemInfo, people: PersonCtx[], index: CatalogIndex, following: boolean[]): number {
   const parts = people.map((p) => tasteParts(info, p, index));
   const opinions = effectiveOpinions(parts, people);
-  const coldLift = COLD_QUALITY * info.quality + COLD_KNOWN * info.pop;
+  const coldLift = COLD_QUALITY * info.quality + COLD_KNOWN * info.pop - (isSubtitled(info.item) ? COLD_SUBTITLED : 0);
   const scores = people.map(
-    (p, k) => opinions[k] + W_QUALITY * info.quality + W_POP * info.pop + (1 - p.sure) * coldLift + parts[k].corr + (following[k] ? 0.12 : 0),
+    (p, k) => opinions[k] + W_QUALITY * info.quality + W_POP * info.pop + (1 - p.known) * coldLift + parts[k].corr + (following[k] ? 0.12 : 0),
   );
   return round4(blend(scores));
 }
@@ -856,7 +902,7 @@ export function feedScore(info: ItemInfo, people: PersonCtx[], index: CatalogInd
 export function rankNewArrivals(arrivals: NewArrivals, who: Who, ctx: EngineContext): NewCard[] {
   if (!watchers(who).length) return [];
   const index = getIndex(ctx.catalog);
-  const people = watchers(who).map((p) => personCtx(p, ctx));
+  const people = watching(who, ctx);
   const plans = ctx.state.settings?.plans;
   const done = new Set<string>();
   const cards: NewCard[] = [];

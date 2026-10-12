@@ -1,7 +1,7 @@
 /**
- * Version 2 behaviour: the "any" time, picks (the Matches tab), watched entries
- * as objects, "either" as a lean towards new, and follow-ups.
- * (The seven original rules, with "any" and picks added to the sweeps, are in rules.test.ts.)
+ * The "any" time, watched entries as objects, "either" as a lean towards new, and follow-ups.
+ * (The hard rules — including Rule 8, titles on the Matches tab — are in rules.test.ts;
+ * households of other sizes, cold start and names are in households.test.ts.)
  */
 import { describe, expect, it } from 'vitest';
 import { EITHER_REWATCH_SHARE, MOODS, TIME_LIMIT_MINUTES, watchers, type Catalog, type CatalogItem, type DeckCard, type EngineContext, type SuggestRequest, type Who } from '../contracts';
@@ -89,94 +89,6 @@ describe('time "any" (I don\'t care)', () => {
       expect(deck.length).toBeGreaterThan(5);
       for (const c of deck) expect(c.minutes).toBeGreaterThan(0);
     }
-  });
-});
-
-// ---------------------------------------------------------------------------
-describe('picks: titles on the Matches tab are left out for the people concerned', () => {
-  const deckHas = (id: string, who: Who, ctx: EngineContext) => ids(engine.buildDeck(req({ who, novelty: 'new' }), ctx, { limit: 100 })).includes(id);
-
-  it("Alex's solo pick hides the title from Alex and from Together, but not from Sam alone", () => {
-    const ctx = makeCtx({ picks: [{ itemId: OFFICE, who: ALEX }] });
-    expect(engine.isPicked(OFFICE, ALEX, ctx)).toBe(true);
-    expect(engine.isPicked(OFFICE, BOTH, ctx)).toBe(true);
-    expect(engine.isPicked(OFFICE, SAM, ctx)).toBe(false);
-    expect(deckHas(OFFICE, ALEX, ctx)).toBe(false);
-    expect(deckHas(OFFICE, BOTH, ctx)).toBe(false);
-    expect(deckHas(OFFICE, SAM, ctx)).toBe(true);
-    expect(engine.isEligible(item(OFFICE), req({ who: ALEX }), ctx)).toBe(false);
-    expect(engine.isEligible(item(OFFICE), req({ who: BOTH }), ctx)).toBe(false);
-    expect(engine.isEligible(item(OFFICE), req({ who: SAM }), ctx)).toBe(true);
-    expect(engine.isPicked(PARKS, ALEX, ctx)).toBe(false);
-  });
-
-  it("the same the other way round for Sam's solo pick", () => {
-    const ctx = makeCtx({ picks: [{ itemId: OFFICE, who: SAM }] });
-    expect(WHO.map((w) => engine.isPicked(OFFICE, w, ctx))).toEqual([false, true, true]);
-    expect(WHO.map((w) => deckHas(OFFICE, w, ctx))).toEqual([true, false, false]);
-  });
-
-  it('a Together match hides it from everyone', () => {
-    const ctx = makeCtx({ picks: [{ itemId: OFFICE, who: BOTH }] });
-    for (const who of WHO) {
-      expect(engine.isPicked(OFFICE, who, ctx)).toBe(true);
-      expect(deckHas(OFFICE, who, ctx)).toBe(false);
-      for (const novelty of ['new', 'either', 'rewatch'] as const) expect(engine.isEligible(item(OFFICE), req({ who, novelty }), ctx)).toBe(false);
-    }
-  });
-
-  it('removing the pick brings it back', () => {
-    const ctx = makeCtx({ picks: [{ itemId: OFFICE, who: BOTH }, { itemId: PARKS, who: ALEX }] });
-    expect(deckHas(OFFICE, ALEX, ctx)).toBe(false);
-    ctx.state.picks = ctx.state.picks.filter((p) => p.itemId !== OFFICE);
-    for (const who of WHO) {
-      expect(engine.isPicked(OFFICE, who, ctx)).toBe(false);
-      expect(deckHas(OFFICE, who, ctx)).toBe(true);
-    }
-    expect(deckHas(PARKS, ALEX, ctx)).toBe(false); // the other pick is untouched
-  });
-
-  it('a picked favourite is left out of rewatch and either decks too', () => {
-    const ctx = makeCtx({ picks: [{ itemId: SCRUBS, who: ALEX }] });
-    for (const novelty of ['rewatch', 'either'] as const) {
-      expect(ids(engine.buildDeck(req({ who: ALEX, novelty }), ctx, { limit: 100 }))).not.toContain(SCRUBS);
-    }
-    expect(ids(engine.buildDeck(req({ who: ALEX, novelty: 'rewatch' }), makeCtx(), { limit: 100 }))).toContain(SCRUBS);
-  });
-
-  it('picked titles are left out of the New feed and the follow-ups', () => {
-    const none = makeCtx();
-    expect(engine.rankNewArrivals(FIXTURE_NEW_ARRIVALS, ALEX, none).map((c) => c.itemId)).toContain(PADDINGTON);
-    expect(engine.followUps(ALEX, none).map((f) => f.itemId)).toContain(HOTD);
-    const ctx = makeCtx({ picks: [{ itemId: PADDINGTON, who: ALEX }, { itemId: HOTD, who: BOTH }] });
-    expect(engine.rankNewArrivals(FIXTURE_NEW_ARRIVALS, ALEX, ctx).map((c) => c.itemId)).not.toContain(PADDINGTON);
-    expect(engine.rankNewArrivals(FIXTURE_NEW_ARRIVALS, BOTH, ctx).map((c) => c.itemId)).not.toContain(PADDINGTON);
-    expect(engine.rankNewArrivals(FIXTURE_NEW_ARRIVALS, SAM, ctx).map((c) => c.itemId)).toContain(PADDINGTON);
-    expect(engine.followUps(ALEX, ctx).map((f) => f.itemId)).not.toContain(HOTD);
-  });
-
-  it('once someone it was picked for marks it watched (after picking it), it is an ordinary seen title again', () => {
-    const picked = dayMs('2026-10-08');
-    const ctx = makeCtx({ seen: { alex: { [OFFICE]: '2026-10-09' } } });
-    ctx.state.picks = [makePick(OFFICE, ALEX, picked)];
-    expect(engine.isPicked(OFFICE, ALEX, ctx)).toBe(false);
-    expect(ids(engine.buildDeck(req({ who: ALEX, novelty: 'rewatch' }), ctx, { limit: 100 }))).toContain(OFFICE);
-    // Watched BEFORE it was picked (a rewatch he swiped right on): still waiting on the Matches tab.
-    const earlier = makeCtx({ seen: { alex: { [OFFICE]: '2026-10-01' } } });
-    earlier.state.picks = [makePick(OFFICE, ALEX, picked)];
-    expect(engine.isPicked(OFFICE, ALEX, earlier)).toBe(true);
-    // Sam watching it does not clear Alex's pick.
-    const other = makeCtx({ seen: { sam: { [OFFICE]: '2026-10-09' } } });
-    other.state.picks = [makePick(OFFICE, ALEX, picked)];
-    expect(engine.isPicked(OFFICE, ALEX, other)).toBe(true);
-  });
-
-  it('copes with households that have no picks list yet', () => {
-    const ctx = makeCtx();
-    (ctx.state as { picks?: unknown }).picks = undefined;
-    expect(engine.isPicked(OFFICE, ALEX, ctx)).toBe(false);
-    expect(engine.buildDeck(req(), ctx).length).toBeGreaterThan(5);
-    expect(engine.followUps(BOTH, ctx).length).toBeGreaterThan(0);
   });
 });
 
@@ -323,7 +235,7 @@ describe('"either" leans new: about one card in ten is a rewatch', () => {
 
   it('on the real favourites, a request none of them suits gets no rewatch; one they suit gets about one in ten', () => {
     const ctx = makeCtx({ catalog: syntheticCatalog(1500) });
-    // Only the seeded favourites are seen here. Alex's are comedies: plenty for a laugh.
+    // Only the sample favourites are seen here. Alex's are comedies: plenty for a laugh.
     const laugh = engine.buildDeck(req({ who: ALEX, mood: 'laugh', viewing: 'background', time: 20, novelty: 'either' }), ctx);
     expect(laugh.filter((c) => engine.hasSeen('alex', c.itemId, ctx))).toHaveLength(3);
     const scared = engine.buildDeck(req({ who: ALEX, mood: 'scared', novelty: 'either' }), ctx);
