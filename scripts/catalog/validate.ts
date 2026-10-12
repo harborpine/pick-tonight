@@ -1,40 +1,90 @@
-/** Sanity checks on the finished catalog. Any returned problem fails the build so yesterday's site stays up. */
-import type { Catalog, ServiceId } from '../../src/contracts/catalog';
-import { DEFAULT_PLANS, SERVICES } from '../../src/contracts/catalog';
-import { DEFAULT_PROVIDERS, servicesOf } from './select';
+/** Sanity checks on the finished build. Any returned problem fails the build so yesterday's site stays up. */
+import type { Catalog, CatalogManifest, ServiceId } from '../../src/contracts/catalog';
+import { CORE_SERVICES, MIN_SERVICE_TITLES, SERVICE_PROVIDERS } from './services';
 
 export const LIMITS = {
-  minTitles: 1800,
-  minPerDefaultService: 150,
-  maxBytes: 2_600_000,
+  /** Distinct titles over all services. */
+  minTotal: 3000,
+  /** Every core service must hold at least this many titles. */
+  minCoreService: 150,
+  /** One service file, raw bytes. */
+  maxFileBytes: 1_500_000,
+  /** A drop of more than this share versus the previous build fails (total and per service). */
   maxShrink: 0.5,
 };
 
-export function countByDefaultService(c: Pick<Catalog, 'items'>): Record<ServiceId, number> {
-  const out = Object.fromEntries(SERVICES.map((s) => [s.id, 0])) as Record<ServiceId, number>;
-  for (const i of c.items) for (const s of servicesOf(i.providers, DEFAULT_PROVIDERS)) out[s]++;
-  return out;
+export interface BuiltService {
+  catalog: Catalog;
+  bytes: number;
 }
 
-export function validateCatalog(c: Catalog, bytes: number, prevCount: number | null, limits = LIMITS): string[] {
+export interface Previous {
+  total: number;
+  perService: Record<ServiceId, number>;
+}
+
+export function distinctTitles(files: Iterable<BuiltService>): number {
+  const ids = new Set<string>();
+  for (const f of files) for (const i of f.catalog.items) ids.add(i.id);
+  return ids.size;
+}
+
+export function validateBuild(
+  manifest: CatalogManifest,
+  files: Map<ServiceId, BuiltService>,
+  prev: Previous | null,
+  limits = LIMITS,
+  core: ServiceId[] = CORE_SERVICES,
+  providers: Record<ServiceId, Set<number>> = SERVICE_PROVIDERS,
+): string[] {
   const problems: string[] = [];
-  if (c.items.length < limits.minTitles) problems.push(`only ${c.items.length} titles (minimum ${limits.minTitles})`);
-  const per = countByDefaultService(c);
-  for (const s of SERVICES) {
-    if (DEFAULT_PLANS[s.id] && per[s.id] < limits.minPerDefaultService)
-      problems.push(`${s.name} has only ${per[s.id]} titles on the default plan (minimum ${limits.minPerDefaultService})`);
+  for (const id of core) {
+    const entry = manifest.services[id];
+    if (!entry) {
+      problems.push(`core service ${id} is missing from the manifest`);
+      continue;
+    }
+    if (entry.titles < limits.minCoreService) problems.push(`core service ${id} has only ${entry.titles} titles (minimum ${limits.minCoreService})`);
   }
-  if (prevCount && c.items.length < prevCount * (1 - limits.maxShrink))
-    problems.push(`catalog shrank from ${prevCount} to ${c.items.length} titles (more than ${limits.maxShrink * 100}%)`);
-  if (bytes > limits.maxBytes) problems.push(`catalog.json is ${bytes} bytes (limit ${limits.maxBytes})`);
-  const ids = new Set(c.items.map((i) => i.id));
-  if (ids.size !== c.items.length) problems.push('duplicate item ids');
-  const badRuntime = c.items.filter((i) => !(i.runtime > 0) || i.providers.length === 0);
-  if (badRuntime.length) problems.push(`${badRuntime.length} items with bad runtime or no providers`);
-  for (const who of ['HG', 'BG'] as const) {
-    const refs = new Set(c.tasteRefs.map((r) => r.id));
-    const missing = c.seedFavorites[who].filter((id) => !refs.has(id));
-    if (missing.length) problems.push(`seed favourites for ${who} missing from tasteRefs: ${missing.join(', ')}`);
+  const total = distinctTitles(files.values());
+  if (total < limits.minTotal) problems.push(`only ${total} distinct titles (minimum ${limits.minTotal})`);
+
+  const seen = new Map<string, string>();
+  for (const [id, f] of files) {
+    const entry = manifest.services[id];
+    if (!entry) problems.push(`${id} has a file but no manifest entry`);
+    else if (entry.titles !== f.catalog.items.length || entry.bytes !== f.bytes) problems.push(`${id}: manifest says ${entry.titles} titles / ${entry.bytes} bytes but the file has ${f.catalog.items.length} / ${f.bytes}`);
+    if (f.bytes > limits.maxFileBytes) problems.push(`${id}.json is ${f.bytes} bytes (limit ${limits.maxFileBytes})`);
+    const ids = new Set(f.catalog.items.map((i) => i.id));
+    if (ids.size !== f.catalog.items.length) problems.push(`${id}: duplicate item ids`);
+    const bad = f.catalog.items.filter((i) => !(i.runtime > 0) || i.providers.length === 0 || !i.lang);
+    if (bad.length) problems.push(`${id}: ${bad.length} items with bad runtime, no providers or no language`);
+    const own = providers[id];
+    if (own) {
+      const stray = f.catalog.items.filter((i) => !i.providers.some((p) => own.has(p)));
+      if (stray.length) problems.push(`${id}: ${stray.length} items that are not on this service`);
+    }
+    for (const i of f.catalog.items) {
+      const json = JSON.stringify(i);
+      const before = seen.get(i.id);
+      if (before === undefined) seen.set(i.id, json);
+      else if (before !== json) {
+        problems.push(`item ${i.id} differs between service files`);
+        break;
+      }
+    }
+  }
+  for (const id of Object.keys(manifest.services)) if (!files.has(id)) problems.push(`manifest lists ${id} but there is no file for it`);
+
+  if (prev) {
+    if (prev.total && total < prev.total * (1 - limits.maxShrink)) problems.push(`catalog shrank from ${prev.total} to ${total} distinct titles (more than ${limits.maxShrink * 100}%)`);
+    for (const [id, n] of Object.entries(prev.perService)) {
+      const now = manifest.services[id]?.titles;
+      if (now !== undefined && n >= 100 && now < n * (1 - limits.maxShrink)) problems.push(`${id} shrank from ${n} to ${now} titles (more than ${limits.maxShrink * 100}%)`);
+      if (now === undefined && core.includes(id)) problems.push(`${id} was published before (${n} titles) and is now gone`);
+    }
   }
   return problems;
 }
+
+export { MIN_SERVICE_TITLES };

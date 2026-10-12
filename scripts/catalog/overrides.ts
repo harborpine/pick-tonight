@@ -1,7 +1,7 @@
 /**
  * Curated corrections for famous titles where the rule-based tags misfire.
  * Matched by kind + normalised title (+ year when given, so remakes don't collide).
- * Keep this short: it is for owner-visible mistakes, not general tuning.
+ * Keep this short and objective: only corrections that are right for anyone, not matters of taste.
  */
 import type { Attention, MoodId, TitleKind } from '../../src/contracts/catalog';
 
@@ -29,7 +29,7 @@ export const OVERRIDES: Override[] = [
   { kind: 'tv', title: 'Lost', year: 2004, attention: 'high' },
   { kind: 'tv', title: 'House of the Dragon', attention: 'high' },
   { kind: 'tv', title: 'Black Mirror', attention: 'high', dropIn: true },
-  { kind: 'tv', title: 'Squid Game', attention: 'high', dropIn: false, flags: NOT_SCARY },
+  { kind: 'tv', title: 'Squid Game', attention: 'high', dropIn: false },
   { kind: 'tv', title: 'The White Lotus', attention: 'medium', dropIn: false },
   { kind: 'tv', title: 'Jeopardy!', attention: 'low', dropIn: true },
   { kind: 'tv', title: 'Wheel of Fortune', attention: 'low', dropIn: true },
@@ -51,16 +51,16 @@ export const OVERRIDES: Override[] = [
   { kind: 'tv', title: 'Love Island USA', attention: 'low', dropIn: true },
   { kind: 'tv', title: 'You', year: 2018, attention: 'medium' },
 
-  // Tense / gripping, but the owner's girlfriend watches them: must not be flagged scary.
-  { kind: 'tv', title: 'Killing Eve', flags: NOT_SCARY },
+  // Gripping, but the rule-based moods under-rate them.
   { kind: 'tv', title: 'Breaking Bad', moods: { gripped: 0.95, cry: 0.2 } },
   { kind: 'tv', title: 'Better Call Saul', moods: { gripped: 0.9, cry: 0.2 } },
   { kind: 'tv', title: 'The Bear', moods: { cry: 0.35 } },
+
+  // Thrillers and dramas that are tense, not frightening: the keyword rules over-flag them as scary.
+  { kind: 'tv', title: 'Killing Eve', flags: NOT_SCARY },
   { kind: 'tv', title: 'You', year: 2018, flags: NOT_SCARY },
   { kind: 'tv', title: 'How to Get Away with Murder', flags: NOT_SCARY },
   { kind: 'tv', title: 'Scandal', year: 2012, flags: NOT_SCARY },
-  { kind: 'tv', title: 'Why Women Kill', flags: NOT_SCARY },
-  { kind: 'tv', title: 'Paradise', year: 2025, flags: NOT_SCARY },
   { kind: 'movie', title: 'The Hunger Games', flags: NOT_SCARY },
   { kind: 'movie', title: 'Gone Girl', flags: { horror: false } },
 

@@ -1,15 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import type { Catalog, CatalogItem } from '../../src/contracts/catalog';
-import { ALL_PROVIDER_IDS } from '../../src/contracts/catalog';
+import type { CatalogItem } from '../../src/contracts/catalog';
+import { ALL_IDS } from './services';
 import { FIXTURE_CATALOG } from '../../src/contracts/fixtures/catalog';
 import { parseDetail, toCatalogItem } from './parse';
 import { computeFlags, mapGenres, pickRuntime, tagTitle, type TagInput } from './tagging';
 import { diffArrivals, prevFromPool } from './diff';
 import { pickStandouts, seasonsToFetch } from './standout';
-import { passesFloor, selectItems, servicesOf, trimTo } from './select';
-import { chooseSearchResult } from './seeds';
+import { passesFloor, selectForService, trimTo } from './select';
 import { TmdbClient, fetchJsonOptional } from './tmdb';
-import { countByDefaultService, validateCatalog } from './validate';
 
 // ---- hand-written TMDB-shaped responses -----------------------------------
 const kw = (...names: string[]) => names.map((name, i) => ({ id: i + 1, name }));
@@ -52,7 +50,7 @@ describe('providers', () => {
   it('keeps only flatrate + ads providers on our ids, never rent/buy/channels', () => {
     const p = parseDetail('tv', tvDetail({ name: 'X', providers: { flatrate: [{ provider_id: 8 }, { provider_id: 9999 }], ads: [{ provider_id: 15 }], rent: [{ provider_id: 337 }], buy: [{ provider_id: 386 }] } }))!;
     expect(p.providers).toEqual([8, 15]);
-    expect(p.providers.every((x) => ALL_PROVIDER_IDS.includes(x))).toBe(true);
+    expect(p.providers.every((x) => ALL_IDS.includes(x))).toBe(true);
   });
   it('has no providers when none apply', () => {
     expect(parseDetail('tv', tvDetail({ name: 'X', providers: { rent: [{ provider_id: 8 }] } }))!.providers).toEqual([]);
@@ -99,11 +97,11 @@ describe('tagging of famous titles', () => {
     const i = tvItem({ name: 'Creepy', genres: genres(G.drama, G.mystery), keywords: ['slasher', 'gore'] });
     expect(i.flags.horror).toBe(true);
   });
-  it('Squid Game and Killing Eve are not scary even with dark keywords', () => {
-    const sq = tvItem({ id: 93405, name: 'Squid Game', first_air_date: '2021-09-17', original_language: 'ko', genres: genres(G.drama, G.mystery), keywords: ['survival', 'gore', 'death game'] });
-    expect(sq.flags.scary).toBe(false);
-    expect(sq.flags.horror).toBe(false);
+  it('Squid Game is high attention and not drop-in; Killing Eve is not scary even with dark keywords', () => {
+    const sq = tvItem({ id: 93405, name: 'Squid Game', first_air_date: '2021-09-17', original_language: 'ko', genres: genres(G.drama, G.mystery), keywords: ['survival', 'death game'] });
     expect(sq.attention).toBe('high');
+    expect(sq.dropIn).toBe(false);
+    expect(sq.lang).toBe('ko');
     const ke = tvItem({ id: 72750, name: 'Killing Eve', first_air_date: '2018-04-08', genres: genres(G.drama, G.thriller, G.crime), keywords: ['assassin', 'serial killer', 'psychopath'] });
     expect(ke.flags.scary).toBe(false);
   });
@@ -191,22 +189,19 @@ describe('selection', () => {
     expect(passesFloor({ ...base, votes: 1000, rating: 4.9, date: '2010-01-01' })).toBe(false);
     expect(passesFloor({ ...base, kind: 'tv', genreIds: [10764], votes: 60, rating: 6.4, date: '2018-01-01' })).toBe(true);
   });
-  it('keeps every service represented instead of letting one crowd out the rest', () => {
-    const pool: CatalogItem[] = [];
-    for (let n = 0; n < 400; n++) pool.push(fx(`movie-${n}`, [8], { popularity: 500 - n, votes: 20000 }));
-    for (let n = 0; n < 60; n++) pool.push(fx(`movie-${1000 + n}`, [2616], { popularity: 5, votes: 500 }));
-    for (let n = 0; n < 60; n++) pool.push(fx(`movie-${2000 + n}`, [386], { popularity: 5, votes: 500 }));
-    const out = selectItems(pool, { perService: 50, cap: 100, minPerService: 40, mustKeep: new Set() });
-    const svc = (s: string) => out.filter((i) => servicesOf(i.providers).includes(s as any)).length;
-    expect(svc('paramount')).toBeGreaterThanOrEqual(40);
-    expect(svc('peacock')).toBeGreaterThanOrEqual(40);
-    expect(out.length).toBeLessThanOrEqual(150);
+  it('trimTo drops the lowest priority first and never the kept ids', () => {
+    const items = [...Array.from({ length: 10 }, (_, n) => fx(`movie-${n}`, [8], { popularity: 100 - n })), ...Array.from({ length: 5 }, (_, n) => fx(`movie-${100 + n}`, [386], { popularity: 1, votes: 10 }))];
+    const out = trimTo(items, 8, new Set(['movie-100']));
+    expect(out.length).toBe(8);
+    expect(out.some((i) => i.id === 'movie-100')).toBe(true);
   });
-  it('trimTo respects the per-service minimum and mustKeep', () => {
-    const items = [...Array.from({ length: 10 }, (_, n) => fx(`movie-${n}`, [8])), ...Array.from({ length: 5 }, (_, n) => fx(`movie-${100 + n}`, [386], { popularity: 1, votes: 10 }))];
-    const out = trimTo(items, 8, 5, new Set(['movie-0']));
-    expect(out.filter((i) => i.providers.includes(386)).length).toBe(5);
-    expect(out.some((i) => i.id === 'movie-0')).toBe(true);
+  it('selectForService fills the quota from that service only', () => {
+    const pool: CatalogItem[] = [];
+    for (let n = 0; n < 100; n++) pool.push(fx(`movie-${n}`, [8], { popularity: 500 - n, votes: 20000 }));
+    for (let n = 0; n < 30; n++) pool.push(fx(`movie-${1000 + n}`, [2616], { popularity: 5, votes: 500 }));
+    const out = selectForService(pool, 'paramount', 20).items;
+    expect(out.length).toBe(20);
+    expect(out.every((i) => i.providers.includes(2616))).toBe(true);
   });
 });
 
@@ -279,7 +274,7 @@ describe('new arrivals diff', () => {
       ['tv-2', { releaseDate: '2020-01-01', seasonPremieres: [{ season: 1, airDate: '2020-01-01' }, { season: 3, airDate: '2026-09-20' }] }],
     ]);
     const r = run([a, b, c], null, null, info);
-    expect(r.seeded).toBe(true);
+    expect(r.fromDates).toBe(true);
     expect(r.arrivals.entries.map((e) => `${e.itemId}:${e.type}`)).toEqual(['movie-1:title', 'tv-2:season']);
     expect(r.arrivals.entries[1].season).toBe(3);
   });
@@ -289,23 +284,6 @@ describe('new arrivals diff', () => {
     const r = run([b, ...many], prev);
     expect(r.suspicious).toBe(true);
     expect(r.arrivals.entries.map((e) => e.itemId)).toEqual(['tv-2']);
-  });
-});
-
-// ---- seeds ------------------------------------------------------------------
-describe('seed resolution', () => {
-  const shows = [
-    { id: 1, name: 'The Traitors', first_air_date: '2022-11-29', origin_country: ['GB'], popularity: 90 },
-    { id: 2, name: 'The Traitors', first_air_date: '2023-01-12', origin_country: ['US'], popularity: 70 },
-    { id: 3, name: 'The Traitors', first_air_date: '2023-02-01', origin_country: ['AU'], popularity: 80 },
-  ];
-  it('picks by year, then country, then popularity', () => {
-    expect(chooseSearchResult(shows, 'tv', { year: 2023, country: 'US' })!.hit.id).toBe(2);
-    expect(chooseSearchResult(shows, 'tv', { year: 2023 })!.hit.id).toBe(3);
-  });
-  it('flags low confidence when nothing matches the hint', () => {
-    const r = chooseSearchResult(shows, 'tv', { year: 1990 })!;
-    expect(r.confident).toBe(false);
   });
 });
 
@@ -336,28 +314,6 @@ describe('TMDB client', () => {
     await c.get('/x', { a: 1, skip: undefined });
     expect(auth).toBe('Bearer secret');
     expect(await fetchJsonOptional('http://x/y.json', (async () => res(404)) as any, async () => {})).toBeNull();
-  });
-});
-
-// ---- validation -----------------------------------------------------------------
-describe('catalog validation', () => {
-  const big = (): Catalog => {
-    const items: CatalogItem[] = [];
-    const prov = [8, 337, 15, 1899, 386, 2616];
-    for (let n = 0; n < 2000; n++) items.push(fx(`movie-${n}`, [prov[n % 6]]));
-    return { schema: 1, builtAt: '', items, tasteRefs: [], seedFavorites: { HG: [], BG: [] } };
-  };
-  it('passes a healthy catalog', () => {
-    expect(validateCatalog(big(), 1_000_000, 2000)).toEqual([]);
-  });
-  it('fails when too small, a service is empty, or it shrank by half', () => {
-    const c = big();
-    expect(validateCatalog({ ...c, items: c.items.slice(0, 500) }, 1000, null).join()).toMatch(/only 500 titles/);
-    const noPeacock = { ...c, items: c.items.filter((i) => !i.providers.includes(386)) };
-    expect(validateCatalog(noPeacock, 1000, null).join()).toMatch(/Peacock has only 0/);
-    expect(countByDefaultService(c).netflix).toBeGreaterThan(300);
-    expect(validateCatalog(c, 1000, 5000).join()).toMatch(/shrank/);
-    expect(validateCatalog(c, 9_000_000, null).join()).toMatch(/bytes/);
   });
 });
 

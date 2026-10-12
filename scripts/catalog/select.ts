@@ -1,23 +1,8 @@
-/** Choosing which titles make the catalog: quality floor, per-service balance, size cap. Pure. */
+/** Choosing which titles each service's file holds: quality floor, per-service quota, genre reserves, size trim. Pure. */
 import type { CatalogItem, ServiceId } from '../../src/contracts/catalog';
-import { DEFAULT_PLANS, SERVICES } from '../../src/contracts/catalog';
+import { quotaFor, SERVICE_PROVIDERS, servicesOf } from './services';
 
-/** Every provider id of each service across all its plans. */
-export const SERVICE_PROVIDERS: Record<ServiceId, Set<number>> = Object.fromEntries(
-  SERVICES.map((s) => [s.id, new Set(s.plans.flatMap((p) => p.providerIds))]),
-) as Record<ServiceId, Set<number>>;
-
-/** Provider ids of each service's default plan (the household's actual plans). */
-export const DEFAULT_PROVIDERS: Record<ServiceId, Set<number>> = Object.fromEntries(
-  SERVICES.map((s) => {
-    const plan = s.plans.find((p) => p.id === DEFAULT_PLANS[s.id]);
-    return [s.id, new Set(plan?.providerIds ?? [])];
-  }),
-) as Record<ServiceId, Set<number>>;
-
-export function servicesOf(providers: number[], map: Record<ServiceId, Set<number>> = SERVICE_PROVIDERS): ServiceId[] {
-  return (Object.keys(map) as ServiceId[]).filter((s) => providers.some((p) => map[s].has(p)));
-}
+export { servicesOf, SERVICE_PROVIDERS };
 
 // ---------------------------------------------------------------------------
 // Quality floor (applied to TMDB discover rows before fetching details, and again to details)
@@ -64,72 +49,75 @@ export function popularityScore(i: CatalogItem): number {
 
 /** Overall keep-priority: well-known and good both count. */
 export function priority(i: CatalogItem): number {
-  const onDefault = servicesOf(i.providers, DEFAULT_PROVIDERS).length > 0;
-  return qualityScore(i) / 10 * 0.5 + popularityScore(i) / 5 * 0.5 + (onDefault ? 0.1 : 0);
+  return (qualityScore(i) / 10) * 0.5 + (popularityScore(i) / 5) * 0.5;
 }
 
-export interface SelectOptions {
-  /** Per service, how many titles to take (alternating popular / high quality). */
-  perService: number;
-  /** Maximum total titles. */
-  cap: number;
-  /** Don't trim a service below this many titles when applying the cap. */
-  minPerService: number;
-  /** Ids that must stay (seed favourites on our services). */
-  mustKeep: Set<string>;
+/** Genre reserves, as a share of the service's quota, so reality / documentary / romance aren't crowded out by action. */
+export const GENRE_RESERVES = [
+  ['reality', 'tv', 0.06],
+  ['talk', 'tv', 0.015],
+  ['documentary', 'tv', 0.04],
+  ['documentary', 'movie', 0.03],
+  ['romance', 'movie', 0.06],
+  ['romance', 'tv', 0.03],
+  ['comedy', 'tv', 0.06],
+] as const;
+
+export interface Selection {
+  items: CatalogItem[];
+  /** Ids picked by the genre reserves for reality / talk / documentary; trimming leaves them alone. */
+  reserved: Set<string>;
 }
 
-/** Ids picked by the genre reserves; the size trimmer leaves them alone so reality / documentary stay represented. */
-export const reservedIds = new Set<string>();
-
-export function selectItems(pool: CatalogItem[], o: SelectOptions): CatalogItem[] {
+/** Members of one service (any plan), best-first per the popularity / quality alternation, plus the genre reserves. */
+export function selectForService(pool: CatalogItem[], service: ServiceId, quota = quotaFor(service), map = SERVICE_PROVIDERS): Selection {
+  const ids = map[service];
+  const members = pool.filter((i) => i.providers.some((p) => ids.has(p)));
   const chosen = new Map<string, CatalogItem>();
-  for (const sid of Object.keys(SERVICE_PROVIDERS) as ServiceId[]) {
-    const members = pool.filter((i) => i.providers.some((p) => SERVICE_PROVIDERS[sid].has(p)));
-    const byPop = [...members].sort((a, b) => popularityScore(b) - popularityScore(a));
-    const byQual = [...members].sort((a, b) => qualityScore(b) - qualityScore(a));
-    const taken = new Set<string>();
-    let a = 0;
-    let b = 0;
-    while (taken.size < Math.min(o.perService, members.length)) {
-      // popular list first, then best-rated list, alternating
-      while (a < byPop.length && taken.has(byPop[a].id)) a++;
-      if (a < byPop.length) taken.add(byPop[a].id);
-      if (taken.size >= o.perService) break;
-      while (b < byQual.length && taken.has(byQual[b].id)) b++;
-      if (b < byQual.length) taken.add(byQual[b].id);
-      if (a >= byPop.length && b >= byQual.length) break;
-    }
-    for (const id of taken) chosen.set(id, pool.find((i) => i.id === id)!);
+  const reserved = new Set<string>();
+  const byPop = [...members].sort((a, b) => popularityScore(b) - popularityScore(a));
+  const byQual = [...members].sort((a, b) => qualityScore(b) - qualityScore(a));
+  const take = Math.min(quota, members.length);
+  let a = 0;
+  let b = 0;
+  while (chosen.size < take) {
+    // popular list first, then best-rated list, alternating
+    while (a < byPop.length && chosen.has(byPop[a].id)) a++;
+    if (a < byPop.length) chosen.set(byPop[a].id, byPop[a]);
+    if (chosen.size >= take) break;
+    while (b < byQual.length && chosen.has(byQual[b].id)) b++;
+    if (b < byQual.length) chosen.set(byQual[b].id, byQual[b]);
+    if (a >= byPop.length && b >= byQual.length) break;
   }
-  // Genre reserves so reality / documentary / romance aren't crowded out by action and fantasy.
-  for (const [genre, kind, n] of [['reality', 'tv', 160], ['talk', 'tv', 25], ['documentary', 'tv', 90], ['documentary', 'movie', 70], ['romance', 'movie', 150], ['romance', 'tv', 70], ['comedy', 'tv', 150]] as const) {
-    const g = pool.filter((i) => i.kind === kind && i.genres.includes(genre)).sort((a, b) => priority(b) - priority(a));
+  for (const [genre, kind, share] of GENRE_RESERVES) {
+    const n = Math.round(quota * share);
+    const g = members.filter((i) => i.kind === kind && i.genres.includes(genre)).sort((x, y) => priority(y) - priority(x));
     for (const i of g.slice(0, n)) {
       chosen.set(i.id, i);
-      if (genre === 'reality' || genre === 'talk' || genre === 'documentary') reservedIds.add(i.id);
+      if (genre === 'reality' || genre === 'talk' || genre === 'documentary') reserved.add(i.id);
     }
   }
-  for (const i of pool) if (o.mustKeep.has(i.id)) chosen.set(i.id, i);
-  return trimTo([...chosen.values()], o.cap, o.minPerService, o.mustKeep);
+  return { items: trimTo([...chosen.values()], quota, reserved), reserved };
 }
 
-/** Drops the lowest-priority titles until `cap` is met, never starving any service below `min`. */
-export function trimTo(items: CatalogItem[], cap: number, min: number, mustKeep: Set<string> = new Set()): CatalogItem[] {
+/** Drops the lowest-priority titles until `cap` is met, never dropping `keep` ids. */
+export function trimTo(items: CatalogItem[], cap: number, keep: Set<string> = new Set()): CatalogItem[] {
   if (items.length <= cap) return items;
-  const counts = new Map<ServiceId, number>();
-  for (const i of items) for (const s of servicesOf(i.providers)) counts.set(s, (counts.get(s) ?? 0) + 1);
   const order = [...items].sort((a, b) => priority(a) - priority(b));
   const drop = new Set<string>();
   let remaining = items.length;
   for (const i of order) {
     if (remaining <= cap) break;
-    if (mustKeep.has(i.id) || reservedIds.has(i.id)) continue;
-    const svcs = servicesOf(i.providers);
-    if (svcs.some((s) => (counts.get(s) ?? 0) <= min)) continue;
-    for (const s of svcs) counts.set(s, (counts.get(s) ?? 0) - 1);
+    if (keep.has(i.id)) continue;
     drop.add(i.id);
     remaining--;
   }
   return items.filter((i) => !drop.has(i.id));
+}
+
+/** Selects every service from the same pool. Items are shared objects, so a title on several services is identical in each. */
+export function selectAll(pool: CatalogItem[], services: ServiceId[], map = SERVICE_PROVIDERS): Map<ServiceId, Selection> {
+  const out = new Map<ServiceId, Selection>();
+  for (const s of services) out.set(s, selectForService(pool, s, quotaFor(s), map));
+  return out;
 }

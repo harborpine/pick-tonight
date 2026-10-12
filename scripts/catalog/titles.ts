@@ -1,13 +1,13 @@
 /**
- * public/data/titles.json: a broad name lookup for the "import my watch history" feature.
+ * public/data/titles.json: a broad name lookup for importing a watch history and for choosing favourites by search.
  * Pure helpers here (row conversion, merging, trimming, validation); the network part is fetchTitleRows().
  */
-import type { CatalogItem, TasteRef, TitleIndex, TitleIndexEntry, TitleKind } from '../../src/contracts/catalog';
+import type { CatalogItem, TitleIndex, TitleIndexEntry, TitleKind } from '../../src/contracts/catalog';
 import { mapGenres } from './tagging';
 import { round2 } from './util';
 
 export const TITLES_MIN = 8000;
-export const TITLES_MAX_BYTES = 3_000_000;
+export const TITLES_MAX_BYTES = 3_500_000;
 
 /** What we keep from one TMDB list row (also what the per-run cache stores). */
 export interface ListRow {
@@ -114,8 +114,7 @@ export function cleanAka(title: string, existing: string[] | undefined, alts: Al
 
 export interface IndexInputs {
   items: CatalogItem[];
-  tasteRefs: TasteRef[];
-  /** Original titles for catalog items / tasteRefs where known (id -> original title). */
+  /** Original titles for catalog items where known (id -> original title). */
   originals?: Map<string, string>;
   listRows: { kind: TitleKind; row: ListRow }[];
   /** Alternative titles by id (catalog items from their details, others from the alt-name cache). */
@@ -123,7 +122,7 @@ export interface IndexInputs {
 }
 
 /**
- * Builds the entries: catalog items and tasteRefs win (real keywords, first 6), list rows fill the rest.
+ * Builds the entries: catalog items (from every service) win with real keywords (first 6) and posters, list rows fill the rest.
  * De-duplicated by id; alternates are merged; sorted most popular first.
  */
 export function buildTitleIndex(inp: IndexInputs): TitleIndexEntry[] {
@@ -160,7 +159,6 @@ export function buildTitleIndex(inp: IndexInputs): TitleIndexEntry[] {
     };
   };
   for (const i of inp.items) put(fromCore(i, i.poster, i.popularity));
-  for (const r of inp.tasteRefs) put(fromCore(r, null, 0));
   for (const { kind, row } of inp.listRows) put(rowToEntry(kind, row));
   for (const [id, e] of byId) {
     const aka = cleanAka(e.title, [...(e.aka ?? []), ...(EXTRA_AKA[id] ?? [])], inp.alternates?.get(id));
@@ -199,7 +197,7 @@ export function validateTitleIndex(idx: TitleIndex, bytes: number, requiredIds: 
   const ids = new Set(idx.titles.map((t) => t.id));
   if (ids.size !== idx.titles.length) problems.push('titles.json has duplicate ids');
   const missing = requiredIds.filter((id) => !ids.has(id));
-  if (missing.length) problems.push(`titles.json is missing ${missing.length} catalog/taste titles, e.g. ${missing.slice(0, 5).join(', ')}`);
+  if (missing.length) problems.push(`titles.json is missing ${missing.length} catalog titles, e.g. ${missing.slice(0, 5).join(', ')}`);
   return problems;
 }
 

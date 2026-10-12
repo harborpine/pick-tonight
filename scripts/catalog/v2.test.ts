@@ -53,11 +53,9 @@ describe('title index', () => {
     expect(e.genres.length).toBeGreaterThan(0);
     expect('aka' in rowToEntry('tv', { id: 6, title: 'Same', original: 'same', date: '2019-01-01', genreIds: [], poster: null, popularity: 1 })).toBe(false);
   });
-  it('de-duplicates by id: catalog item wins, aka merged, never drops catalog items or taste refs', () => {
-    const ref = { id: 'tv-777', tmdbId: 777, kind: 'tv' as const, title: 'Taste Only', year: 2001, genres: ['comedy' as const], keywords: ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'], related: [] };
+  it('de-duplicates by id: catalog item wins, aka merged, list rows only fill the gaps', () => {
     const idx = buildTitleIndex({
       items: [item],
-      tasteRefs: [ref],
       originals: new Map([[item.id, 'Original Name']]),
       listRows: [
         { kind: 'tv', row: { id: item.tmdbId, title: item.title, original: 'Another Name', date: `${item.year}-01-01`, genreIds: [], poster: '/x.jpg', popularity: 1 } },
@@ -71,7 +69,7 @@ describe('title index', () => {
     expect(mine.keywords).toEqual(item.keywords.slice(0, 6));
     expect(mine.aka).toEqual(expect.arrayContaining(['Original Name', 'Another Name']));
     const taste = idx.find((e) => e.id === 'tv-777')!;
-    expect(taste.keywords).toEqual(['a', 'b', 'c', 'd', 'e', 'f']);
+    expect(taste.keywords).toEqual([]);
     expect(taste.popularity).toBe(40);
     expect(taste.poster).toBe('/p.jpg');
     expect(idx.filter((e) => e.id === 'tv-900')).toHaveLength(1);
@@ -79,7 +77,7 @@ describe('title index', () => {
     for (let i = 1; i < idx.length; i++) expect(idx[i - 1].popularity).toBeGreaterThanOrEqual(idx[i].popularity);
   });
   it('keeps same-named titles of different kinds and years apart', () => {
-    const idx = buildTitleIndex({ items: [], tasteRefs: [], listRows: [row(1, 'The Office', '2005-03-24', 80), row(2, 'The Office', '2001-07-09', 20), { kind: 'movie', row: { id: 1, title: 'The Office', original: 'The Office', date: '1999-01-01', genreIds: [], poster: null, popularity: 1 } }] });
+    const idx = buildTitleIndex({ items: [], listRows: [row(1, 'The Office', '2005-03-24', 80), row(2, 'The Office', '2001-07-09', 20), { kind: 'movie', row: { id: 1, title: 'The Office', original: 'The Office', date: '1999-01-01', genreIds: [], poster: null, popularity: 1 } }] });
     expect(idx.map((e) => e.id).sort()).toEqual(['movie-1', 'tv-1', 'tv-2']);
     expect(idx[0].id).toBe('tv-1');
   });
@@ -245,7 +243,6 @@ describe('alternate names (aka)', () => {
     const alternates = new Map([[item.id, [a('US', 'US Name')]], ['tv-900', [a('US', 'Baking Show')]]]);
     const idx = buildTitleIndex({
       items: [item],
-      tasteRefs: [],
       alternates,
       listRows: [{ kind: 'tv', row: { id: 900, title: 'Bake Off', original: 'Bake Off', date: '2010-01-01', genreIds: [], poster: null, popularity: 5 } }],
     });
@@ -256,7 +253,7 @@ describe('alternate names (aka)', () => {
 
 describe('hand-checked extra names', () => {
   it('adds the Baking Show name to the Channel 4 listing', () => {
-    const idx = buildTitleIndex({ items: [], tasteRefs: [], listRows: [{ kind: 'tv', row: { id: 87012, title: 'The Great British Bake Off', original: 'The Great British Bake Off', date: '2017-08-29', genreIds: [], poster: null, popularity: 20 } }] });
+    const idx = buildTitleIndex({ items: [], listRows: [{ kind: 'tv', row: { id: 87012, title: 'The Great British Bake Off', original: 'The Great British Bake Off', date: '2017-08-29', genreIds: [], poster: null, popularity: 20 } }] });
     expect(idx[0].aka).toEqual(['The Great British Baking Show']);
   });
 });

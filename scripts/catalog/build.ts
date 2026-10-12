@@ -1,31 +1,33 @@
 /**
- * Daily catalog build: TMDB -> public/data/catalog.json, new.json (+ pool.json for the next diff).
+ * Daily catalog build: TMDB -> public/data/manifest.json, catalog/<service>.json (one per service),
+ * new.json, titles.json (+ pool.json for the next build's new-arrivals diff).
  * Run with `npm run catalog`. Needs env TMDB_TOKEN (a GitHub Actions secret; never on a PC).
  * Exits non-zero (so nothing is deployed) when the result looks broken.
  */
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { gunzipSync, gzipSync } from 'node:zlib';
 import path from 'node:path';
-import type { Catalog, CatalogItem, NewArrivals, ServiceId, TasteRef, TitleIndex, TitleKind } from '../../src/contracts/catalog';
-import { ALL_PROVIDER_IDS, SEED_FAVORITE_TITLES, SERVICES } from '../../src/contracts/catalog';
+import type { Catalog, CatalogItem, CatalogManifest, NewArrivals, ServiceId, TitleIndex, TitleKind } from '../../src/contracts/catalog';
 import { fetchJsonOptional, TmdbClient } from './tmdb';
-import { DETAIL_APPEND_MOVIE, DETAIL_APPEND_TV, parseDetail, toCatalogItem, toCore, type Parsed } from './parse';
-import { DEFAULT_PROVIDERS, passesFloor, selectItems, servicesOf, SERVICE_PROVIDERS, trimTo } from './select';
+import { DETAIL_APPEND_MOVIE, DETAIL_APPEND_TV, parseDetail, rawAlts, toCatalogItem, type Parsed } from './parse';
+import { passesFloor, selectAll, trimTo, type Selection } from './select';
 import { pickStandouts, seasonsToFetch, type RawEpisode } from './standout';
-import { diffArrivals, prevFromPool, type Pool, type SeedInfo } from './diff';
-import { allSeedTitles, chooseSearchResult, SEED_IDS, type SeedTitle } from './seeds';
-import { countByDefaultService, validateCatalog, LIMITS } from './validate';
-import { isoDate, median, pMap, sleep } from './util';
+import { diffArrivals, prevFromPool, prevUniverse, type DateInfo, type Pool } from './diff';
+import { ALL_IDS, isBigService, isChannelAddOn, MIN_SERVICE_TITLES, onPlan, SERVICES_IN_USE, validateServiceTable } from './services';
+import { LIMITS, validateBuild, distinctTitles, type BuiltService } from './validate';
+import { isoDate, median, pMap } from './util';
 import { buildTitleIndex, titleListJobs, toListRow, trimIndexToBytes, validateTitleIndex, type AltTitle, type ListRow } from './titles';
-import { rawAlts } from './parse';
 import { findSpinoffs, KnownTitles, knownFromIndex } from './spinoff';
+import { isFresh, overlayProviders, pruneStore, type DetailStore } from './detailcache';
 
-// Derived from the repo owner so an account rename can't break the previous-build lookup.
-const SITE = process.env.SITE_URL ?? `https://${process.env.GITHUB_REPOSITORY_OWNER ?? 'harborpine'}.github.io/pick-tonight`;
+// Derived from the repo owner and name so an account rename can't break the previous-build lookup.
+const REPO_NAME = (process.env.GITHUB_REPOSITORY ?? 'harborpine/pick-tonight').split('/')[1];
+const SITE = process.env.SITE_URL ?? `https://${process.env.GITHUB_REPOSITORY_OWNER ?? 'harborpine'}.github.io/${REPO_NAME}`;
 const OUT_DIR = path.resolve('public/data');
 const CACHE_DIR = path.resolve('.cache/catalog');
-const TARGET = { perService: Number(process.env.PER_SERVICE ?? 620), cap: Number(process.env.CAP ?? 3400), minPerService: 380 };
-const MAX_BYTES = 2_500_000;
-const STANDOUT_SHOWS = 160;
+/** Per-file size budget, a little under the validation limit so a late addition can't tip it over. */
+const FILE_BUDGET = 1_450_000;
+const STANDOUT_SHOWS = 400;
 const log = (...a: unknown[]) => console.log(...a);
 
 interface Candidate {
@@ -37,17 +39,21 @@ interface Candidate {
 // 1. Discover candidates per provider
 // ---------------------------------------------------------------------------
 
-async function discover(tmdb: TmdbClient, today: string): Promise<Map<string, Candidate>> {
+async function discover(tmdb: TmdbClient, today: string) {
   const found = new Map<string, Candidate>();
+  /** key -> provider ids discovery saw it on today. */
+  const observed = new Map<string, Set<number>>();
   let skippedByFloor = 0;
   type Job = { kind: TitleKind; provider: number; sort: string; pages: number; extra: Record<string, string | number> };
   const jobs: Job[] = [];
-  for (const provider of ALL_PROVIDER_IDS) {
+  const bigProviders = new Set(SERVICES_IN_USE.filter((s) => isBigService(s.id)).flatMap((s) => s.plans.flatMap((p) => p.providerIds)));
+  for (const provider of ALL_IDS) {
+    const k = bigProviders.has(provider) ? 2 : 1;
     for (const kind of ['movie', 'tv'] as const) {
       const dateField = kind === 'movie' ? 'primary_release_date' : 'first_air_date';
-      jobs.push({ kind, provider, sort: 'popularity.desc', pages: 12, extra: {} });
-      jobs.push({ kind, provider, sort: 'vote_count.desc', pages: 12, extra: {} });
-      jobs.push({ kind, provider, sort: 'vote_average.desc', pages: 6, extra: { 'vote_count.gte': kind === 'movie' ? 500 : 250 } });
+      jobs.push({ kind, provider, sort: 'popularity.desc', pages: 12 * k, extra: {} });
+      jobs.push({ kind, provider, sort: 'vote_count.desc', pages: 12 * k, extra: {} });
+      jobs.push({ kind, provider, sort: 'vote_average.desc', pages: 6 * k, extra: { 'vote_count.gte': kind === 'movie' ? 500 : 250 } });
       const genreJobs = kind === 'tv' ? [10764, 10767, 99, 10749] : [99, 10749];
       for (const gid of genreJobs) jobs.push({ kind, provider, sort: 'popularity.desc', pages: 6, extra: { with_genres: gid, 'vote_count.gte': 5 } });
       jobs.push({ kind, provider, sort: `${dateField}.desc`, pages: 5, extra: { 'vote_count.gte': 5, [`${dateField}.lte`]: today } });
@@ -56,7 +62,6 @@ async function discover(tmdb: TmdbClient, today: string): Promise<Map<string, Ca
   const pageTasks: { job: Job; page: number }[] = jobs.flatMap((job) => Array.from({ length: job.pages }, (_, i) => ({ job, page: i + 1 })));
   const lastPage = new Map<Job, number>();
   let failed = 0;
-  const dbg = { rows: 0, kept: 0, floored: [] as string[] };
   await pMap(
     pageTasks,
     async ({ job, page }) => {
@@ -73,33 +78,32 @@ async function discover(tmdb: TmdbClient, today: string): Promise<Map<string, Ca
           ...job.extra,
         });
         if (page >= (res.total_pages ?? 1)) lastPage.set(job, res.total_pages ?? 1);
-        const gj = (job.extra as any).with_genres;
-        if (gj === 10764) dbg.rows += (res.results ?? []).length;
         for (const r of res.results ?? []) {
           if (r.adult) continue;
           const date = (job.kind === 'movie' ? r.release_date : r.first_air_date) || undefined;
           if (!passesFloor({ kind: job.kind, votes: r.vote_count ?? 0, rating: r.vote_average ?? 0, genreIds: r.genre_ids ?? [], date, today })) {
             skippedByFloor++;
-            if (gj === 10764) dbg.floored.push(`${r.name} v${r.vote_count} r${r.vote_average}`);
             continue;
           }
-          if (gj === 10764) dbg.kept++;
-          found.set(`${job.kind}-${r.id}`, { kind: job.kind, id: r.id });
+          const key = `${job.kind}-${r.id}`;
+          found.set(key, { kind: job.kind, id: r.id });
+          let set = observed.get(key);
+          if (!set) observed.set(key, (set = new Set()));
+          set.add(job.provider);
         }
       } catch (e) {
         failed++;
         if (failed <= 5) console.warn(`discover page failed (${job.kind} provider ${job.provider} ${job.sort} p${page}): ${(e as Error).message}`);
       }
     },
-    24,
+    40,
   );
-  log(`Reality discovery: ${dbg.rows} rows, ${dbg.kept} kept; floored sample: ${dbg.floored.slice(0, 15).join(' | ')}`);
   log(`Discover: ${pageTasks.length} pages requested, ${failed} failed; ${found.size} candidates (${skippedByFloor} rows under the quality floor)`);
-  return found;
+  return { found, observed };
 }
 
 // ---------------------------------------------------------------------------
-// 2. Details
+// 2. Details (cached 3-6 days per title)
 // ---------------------------------------------------------------------------
 
 async function fetchParsed(tmdb: TmdbClient, kind: TitleKind, id: number): Promise<Parsed | null> {
@@ -115,37 +119,25 @@ async function fetchParsed(tmdb: TmdbClient, kind: TitleKind, id: number): Promi
   }
 }
 
-// ---------------------------------------------------------------------------
-// 3. Seeds
-// ---------------------------------------------------------------------------
-
-async function resolveSeed(tmdb: TmdbClient, s: SeedTitle): Promise<number | null> {
-  const fixed = SEED_IDS[s.key];
-  if (fixed) return fixed;
+const DETAIL_FILE = path.join(CACHE_DIR, 'details.json.gz');
+async function loadDetailStore(): Promise<DetailStore> {
   try {
-    const res = await tmdb.get<any>(`/search/${s.kind}`, {
-      query: s.hint.query ?? s.title,
-      language: 'en-US',
-      include_adult: false,
-      ...(s.hint.year ? (s.kind === 'movie' ? { year: s.hint.year } : { first_air_date_year: s.hint.year }) : {}),
-    });
-    let choice = chooseSearchResult(res.results ?? [], s.kind, s.hint);
-    if (!choice) {
-      const retry = await tmdb.get<any>(`/search/${s.kind}`, { query: s.hint.query ?? s.title, language: 'en-US' });
-      choice = chooseSearchResult(retry.results ?? [], s.kind, s.hint);
-    }
-    if (!choice) return null;
-    const h = choice.hit;
-    log(`SEED RESOLVED ${JSON.stringify(s.key)}: ${h.id}  // ${h.title ?? h.name} (${(h.release_date ?? h.first_air_date ?? '').slice(0, 4)})${choice.confident ? '' : '  [LOW CONFIDENCE]'}`);
-    return h.id;
-  } catch (e) {
-    console.warn(`seed search failed for ${s.title}: ${(e as Error).message}`);
-    return null;
+    return JSON.parse(gunzipSync(await readFile(DETAIL_FILE)).toString('utf8')) as DetailStore;
+  } catch {
+    return {};
+  }
+}
+async function saveDetailStore(store: DetailStore) {
+  try {
+    await mkdir(CACHE_DIR, { recursive: true });
+    await writeFile(DETAIL_FILE, gzipSync(JSON.stringify(store)));
+  } catch {
+    /* cache is optional */
   }
 }
 
 // ---------------------------------------------------------------------------
-// 4. Standout episodes
+// 3. Standout episodes
 // ---------------------------------------------------------------------------
 
 async function readCache(file: string, maxAgeDays: number): Promise<any | null> {
@@ -192,6 +184,7 @@ async function addStandouts(tmdb: TmdbClient, items: CatalogItem[], anthologyIds
     .filter((i) => i.kind === 'tv' && (i.dropIn || anthologyIds.has(i.id)) && (i.seasons ?? 0) >= 1)
     .sort((a, b) => b.popularity - a.popularity)
     .slice(0, STANDOUT_SHOWS);
+  const inShows = new Set(shows.map((s) => s.id));
   let withStandouts = 0;
   await pMap(
     shows,
@@ -205,7 +198,7 @@ async function addStandouts(tmdb: TmdbClient, items: CatalogItem[], anthologyIds
     8,
   );
   // Everything else whose episode length is only a guess: sample a few seasons for the typical episode runtime.
-  const others = items.filter((i) => i.kind === 'tv' && guessRuntime.has(i.id) && !shows.includes(i));
+  const others = items.filter((i) => i.kind === 'tv' && guessRuntime.has(i.id) && !inShows.has(i.id));
   let fixed = 0;
   await pMap(
     others,
@@ -230,7 +223,7 @@ function fixRuntime(show: CatalogItem, eps: RawEpisode[]): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// 5. Title name lookup (titles.json): list pages only, no per-title calls
+// 4. Title name lookup (titles.json): list pages only, no per-title calls
 // ---------------------------------------------------------------------------
 
 async function fetchTitleRows(tmdb: TmdbClient): Promise<{ kind: TitleKind; row: ListRow }[]> {
@@ -270,7 +263,7 @@ async function fetchTitleRows(tmdb: TmdbClient): Promise<{ kind: TitleKind; row:
         if (failed <= 5) console.warn(`title list page failed (${job.name} p${page}): ${(e as Error).message}`);
       }
     },
-    14,
+    40,
   );
   for (const job of toFetch) {
     const list = perJob.get(job.name) ?? [];
@@ -279,10 +272,6 @@ async function fetchTitleRows(tmdb: TmdbClient): Promise<{ kind: TitleKind; row:
   }
   log(`Title lists: ${jobs.length} jobs (${cachedJobs} from cache), ${tasks.length} pages requested, ${failed} failed; ${rows.length} rows`);
   return rows;
-}
-
-function buildIndexFor(items: CatalogItem[], tasteRefs: TasteRef[], originals: Map<string, string>, listRows: { kind: TitleKind; row: ListRow }[], alternates?: Map<string, AltTitle[]>) {
-  return buildTitleIndex({ items, tasteRefs, originals, listRows, alternates });
 }
 
 /** Alternate names for the most popular non-catalog titles: one call each, cached 30 days per title. Failures are non-fatal. */
@@ -303,7 +292,7 @@ async function fetchAltNames(tmdb: TmdbClient, ids: string[]): Promise<Map<strin
         failed++;
       }
     },
-    14,
+    40,
   );
   // forget stale entries nobody asked for, so the cache cannot grow without bound
   const want = new Set(ids);
@@ -313,6 +302,30 @@ async function fetchAltNames(tmdb: TmdbClient, ids: string[]): Promise<Map<strin
   const out = new Map<string, AltTitle[]>();
   for (const id of ids) if (store[id]) out.set(id, store[id].alts);
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// 5. The previous build, from the live site
+// ---------------------------------------------------------------------------
+
+async function loadPrevious() {
+  const [manifest, prevNew, prevPool] = await Promise.all([
+    fetchJsonOptional<CatalogManifest>(`${SITE}/data/manifest.json`),
+    fetchJsonOptional<NewArrivals>(`${SITE}/data/new.json`),
+    fetchJsonOptional<Pool>(`${SITE}/data/pool.json`),
+  ]);
+  const catalogs: Catalog[] = [];
+  const perService: Record<ServiceId, number> = {};
+  if (manifest) {
+    for (const [id, e] of Object.entries(manifest.services)) {
+      perService[id] = e.titles;
+      const c = await fetchJsonOptional<Catalog>(`${SITE}/${e.file}`);
+      if (c) catalogs.push(c);
+    }
+  }
+  const total = new Set(catalogs.flatMap((c) => c.items.map((i) => i.id))).size;
+  log(`Previous build: ${manifest ? `${Object.keys(perService).length} services, ${total} distinct titles` : 'none (first run)'}, new.json ${prevNew ? prevNew.entries.length + ' entries' : 'none'}, pool ${prevPool ? Object.keys(prevPool.titles).length : 'none'}`);
+  return { manifest, prevNew, prevPool, catalogs, prev: manifest ? { total, perService } : null };
 }
 
 // ---------------------------------------------------------------------------
@@ -327,210 +340,194 @@ async function main() {
   const today = isoDate(new Date());
   const tmdb = new TmdbClient({ token, concurrency: 14 });
 
-  // Previous build, from the live site. 404 (first run) is fine; other errors fail the build.
-  const [prevCatalog, prevNew, prevPool] = await Promise.all([
-    fetchJsonOptional<Catalog>(`${SITE}/data/catalog.json`),
-    fetchJsonOptional<NewArrivals>(`${SITE}/data/new.json`),
-    fetchJsonOptional<Pool>(`${SITE}/data/pool.json`),
-  ]);
-  log(`Previous build: catalog ${prevCatalog ? prevCatalog.items.length + ' titles' : 'none (first run)'}, new.json ${prevNew ? prevNew.entries.length + ' entries' : 'none'}, pool ${prevPool ? Object.keys(prevPool.titles).length : 'none'}`);
-
-  // Candidates and seeds
-  const candidates = await discover(tmdb, today);
-  const seeds = allSeedTitles();
-  const seedIds = new Map<string, number | null>();
-  await pMap(seeds, async (s) => void seedIds.set(s.key, await resolveSeed(tmdb, s)), 6);
-  const unresolved = seeds.filter((s) => !seedIds.get(s.key));
-  if (unresolved.length) console.warn(`WARNING: could not resolve seeds: ${unresolved.map((s) => s.title).join(', ')}`);
-
-  const want = new Map<string, Candidate>(candidates);
-  for (const s of seeds) {
-    const id = seedIds.get(s.key);
-    if (id) want.set(`${s.kind}-${id}`, { kind: s.kind, id });
+  // The services table must match TMDB's real provider list (no stale ids, no channel add-ons).
+  const names = new Map<number, string>();
+  for (const kind of ['movie', 'tv'] as const) {
+    const res = await tmdb.get<any>(`/watch/providers/${kind}`, { watch_region: 'US', language: 'en-US' });
+    for (const p of res.results ?? []) names.set(p.provider_id, p.provider_name);
   }
-
-  // Recommendations of every seed favourite join the candidate pool (kept only if on our plans and above the floor).
-  const seedRecs: Candidate[] = [];
-  for (const s of seeds) {
-    const id = seedIds.get(s.key);
-    if (!id) continue;
-    try {
-      const d = await tmdb.get<any>(`/${s.kind}/${id}/recommendations`, { language: 'en-US' });
-      for (const r of d.results ?? []) if (!r.adult) seedRecs.push({ kind: s.kind, id: r.id });
-    } catch {
-      /* optional */
-    }
+  const tableProblems = validateServiceTable(SERVICES_IN_USE, names);
+  if (tableProblems.length) {
+    console.error('SERVICES TABLE PROBLEMS:\n - ' + tableProblems.join('\n - '));
+    process.exit(1);
   }
-  for (const c of seedRecs) if (!want.has(`${c.kind}-${c.id}`)) want.set(`${c.kind}-${c.id}`, c);
+  void isChannelAddOn;
 
-  // Details
+  const previous = await loadPrevious();
+
+  // Candidates and details
+  const { found: want, observed } = await discover(tmdb, today);
   log(`Fetching details for ${want.size} titles...`);
+  const store = await loadDetailStore();
+  const now = Date.now();
   const parsedAll = new Map<string, Parsed>();
   let done = 0;
+  let fetchedCount = 0;
   await pMap(
     [...want.entries()],
     async ([key, c]) => {
-      const p = await fetchParsed(tmdb, c.kind, c.id);
-      if (p) parsedAll.set(key, p);
-      if (++done % 1000 === 0) log(`  ${done}/${want.size} details (${Math.round((Date.now() - started) / 1000)}s)`);
+      const cached = store[key];
+      let p: Parsed | null = null;
+      if (isFresh(cached, key, now)) p = cached.parsed;
+      else {
+        p = await fetchParsed(tmdb, c.kind, c.id);
+        fetchedCount++;
+        if (p) store[key] = { at: Date.now(), parsed: p };
+      }
+      if (p) parsedAll.set(key, overlayProviders(p, observed.get(key)));
+      if (++done % 2000 === 0) log(`  ${done}/${want.size} details (${Math.round((Date.now() - started) / 1000)}s)`);
     },
     40,
   );
-  log(`Details: ${parsedAll.size} ok, ${want.size - parsedAll.size} skipped; ${tmdb.stats.requests} requests, ${tmdb.stats.retries} retries`);
+  const dropped = pruneStore(store, new Set(want.keys()), now);
+  await saveDetailStore(store);
+  log(`Details: ${parsedAll.size} ok, ${want.size - parsedAll.size} skipped; ${fetchedCount} fetched, ${want.size - fetchedCount} from cache (${dropped} stale cache entries dropped); ${tmdb.stats.requests} requests, ${tmdb.stats.retries} retries`);
 
-  // Seed taste references (on our services or not)
-  const tasteRefs: TasteRef[] = [];
-  const seedFavorites = { HG: [] as string[], BG: [] as string[] };
-  const seedKeys = new Set<string>();
-  const seedOnService = new Set<string>();
-  for (const s of seeds) {
-    const id = seedIds.get(s.key);
-    const p = id ? parsedAll.get(`${s.kind}-${id}`) : undefined;
-    if (!p) continue;
-    const core = toCore(p);
-    if (!tasteRefs.some((r) => r.id === core.id)) tasteRefs.push(core);
-    seedKeys.add(core.id);
-    if (p.providers.length) seedOnService.add(core.id);
-  }
-  for (const who of ['HG', 'BG'] as const)
-    for (const s of SEED_FAVORITE_TITLES[who]) {
-      const id = seedIds.get(`${s.kind}|${s.title}`);
-      if (id && seedKeys.has(`${s.kind}-${id}`)) seedFavorites[who].push(`${s.kind}-${id}`);
-    }
-
-  // Pool = everything on our providers (for the next build's diff), then the catalog is chosen from it
-  const pool: Pool = { schema: 1, builtAt, titles: {} };
-  const items: CatalogItem[] = [];
-  const info = new Map<string, SeedInfo>();
+  // Pool = everything on our providers (for the next build's diff), then each service's titles are chosen from it
+  const pool: Pool = { schema: 1, builtAt, ids: ALL_IDS, titles: {} };
+  const eligible: CatalogItem[] = [];
+  const info = new Map<string, DateInfo>();
   const anthologyIds = new Set<string>();
   const guessRuntime = new Set<string>();
   for (const [key, p] of parsedAll) {
     if (!p.providers.length || p.adult) continue;
     pool.titles[key] = { p: p.providers, ...(p.seasons ? { s: p.seasons } : {}) };
-    const isSeed = seedKeys.has(key);
-    // reality / talk shows get the lower rating bar
     const lenient = p.genres.includes('reality') || p.genres.includes('talk');
-    const ok = passesFloor({ kind: p.kind, votes: p.votes, rating: p.rating, genreIds: lenient ? [10764] : [], date: p.releaseDate, today });
-    if (!ok && !isSeed) continue;
+    if (!passesFloor({ kind: p.kind, votes: p.votes, rating: p.rating, genreIds: lenient ? [10764] : [], date: p.releaseDate, today })) continue;
     const item = toCatalogItem(p, today);
-    items.push(item);
+    eligible.push(item);
     info.set(item.id, { releaseDate: p.releaseDate, seasonPremieres: p.seasonPremieres });
     if (p.allKeywords.includes('anthology')) anthologyIds.add(item.id);
     if (p.runtimeGuess) guessRuntime.add(item.id);
   }
-  log(`Eligible after quality floor: ${items.length} titles on our providers`);
+  log(`Eligible after quality floor: ${eligible.length} titles on our providers`);
 
-  let chosen = selectItems(items, { ...TARGET, mustKeep: seedOnService });
-  await addStandouts(tmdb, chosen, anthologyIds, guessRuntime);
+  // Per-service selection
+  const selections = selectAll(eligible, SERVICES_IN_USE.map((s) => s.id));
+  const published = new Map<ServiceId, Selection>();
+  const left: string[] = [];
+  for (const [id, sel] of selections) {
+    if (sel.items.length >= MIN_SERVICE_TITLES) published.set(id, sel);
+    else left.push(`${id} (${sel.items.length})`);
+  }
+  if (left.length) log(`Left out (under ${MIN_SERVICE_TITLES} titles): ${left.join(', ')}`);
+  const unionMap = new Map<string, CatalogItem>();
+  for (const sel of published.values()) for (const i of sel.items) unionMap.set(i.id, i);
+  const union = [...unionMap.values()];
+  log(`Selected ${union.length} distinct titles over ${published.size} services`);
+
+  await addStandouts(tmdb, union, anthologyIds, guessRuntime);
 
   // Title name lookup rows (cached), then spinoff links (which use the lookup as their list of well-known shows)
   const listRows = await fetchTitleRows(tmdb);
   const originals = new Map<string, string>();
   for (const [key, p] of parsedAll) if (p.originalTitle) originals.set(key, p.originalTitle);
-  const wideIndex = buildIndexFor(chosen, tasteRefs, originals, listRows);
+  const wideIndex = buildTitleIndex({ items: union, originals, listRows });
   const known = new KnownTitles(knownFromIndex(wideIndex));
-  const itemById = new Map(chosen.map((i) => [i.id, i]));
-  const children = chosen
+  const children = union
     .filter((i) => i.kind === 'tv')
     .map((i) => ({ id: i.id, title: i.title, year: i.year, keywords: parsedAll.get(i.id)?.allKeywords ?? i.keywords, related: parsedAll.get(i.id)?.related ?? i.related }));
   const curatedNotes: string[] = [];
   const spinLinks = findSpinoffs(children, known, 3, curatedNotes);
   for (const n of curatedNotes) log(`  CURATED NOTE: ${n}`);
-  const label = (id: string) => {
-    const k = known.get(id);
-    return k ? `${k.title} (${k.year}) [${id}]` : `[${id}]`;
-  };
-  log(`
-SPINOFF LINKS (${spinLinks.length}):`);
-  for (const l of spinLinks) {
-    const c = itemById.get(l.childId)!;
-    c.spinoffOf = l.parentIds;
-    log(`  SPINOFF ${c.title} (${c.year}) [${c.id}] <- ${l.parentIds.map(label).join(' ; ')}   via ${l.via}`);
-  }
+  for (const l of spinLinks) unionMap.get(l.childId)!.spinoffOf = l.parentIds;
+  log(`Spinoff links: ${spinLinks.length}`);
 
-  // Assemble, trimming until under the size budget
-  const assemble = (list: CatalogItem[]): Catalog => ({ schema: 1, builtAt, items: list, tasteRefs, seedFavorites });
-  let catalog = assemble(chosen);
-  let json = JSON.stringify(catalog);
-  while (Buffer.byteLength(json) > MAX_BYTES && chosen.length > 1200) {
-    chosen = trimTo(chosen, Math.floor(chosen.length * 0.97), 300, seedOnService);
-    catalog = assemble(chosen);
-    json = JSON.stringify(catalog);
+  // Per-service files, each trimmed (lowest priority first) to its size budget
+  const files = new Map<ServiceId, BuiltService & { json: string }>();
+  const manifest: CatalogManifest = { schema: 1, builtAt, services: {} };
+  for (const s of SERVICES_IN_USE) {
+    const sel = published.get(s.id);
+    if (!sel) continue;
+    let items = sel.items;
+    let json = JSON.stringify({ schema: 1, builtAt, items } satisfies Catalog);
+    while (Buffer.byteLength(json) > FILE_BUDGET && items.length > MIN_SERVICE_TITLES) {
+      items = trimTo(items, Math.floor(items.length * 0.96), sel.reserved);
+      json = JSON.stringify({ schema: 1, builtAt, items } satisfies Catalog);
+    }
+    const bytes = Buffer.byteLength(json);
+    files.set(s.id, { catalog: { schema: 1, builtAt, items }, bytes, json });
+    manifest.services[s.id] = { file: `data/catalog/${s.id}.json`, titles: items.length, bytes };
   }
-  const bytes = Buffer.byteLength(json);
+  const finalIds = new Set<string>();
+  for (const f of files.values()) for (const i of f.catalog.items) finalIds.add(i.id);
+  const finalItems = union.filter((i) => finalIds.has(i.id));
 
   // New arrivals
-  const prev = prevFromPool(prevPool, prevCatalog);
-  const diff = diffArrivals({ items: chosen, prev, prevNew, today, builtAt, info });
+  const prevState = prevFromPool(previous.prevPool, previous.catalogs.length ? previous.catalogs : null);
+  const diff = diffArrivals({ items: finalItems, prev: prevState, prevNew: previous.prevNew, today, builtAt, info, knownProviders: prevUniverse(previous.prevPool, prevState) });
 
-  // Title index for the final catalog
-  const protectedIds = new Set<string>([...chosen.map((i) => i.id), ...tasteRefs.map((r) => r.id)]);
+  // Title index: every catalog item of every service, plus the wide net
   const alternates = new Map<string, AltTitle[]>();
-  for (const id of protectedIds) {
+  for (const id of finalIds) {
     const p = parsedAll.get(id);
     if (p?.altTitles.length) alternates.set(id, p.altTitles);
   }
-  const bare = buildIndexFor(chosen, tasteRefs, originals, listRows).filter((e) => !protectedIds.has(e.id));
+  const bare = buildTitleIndex({ items: finalItems, originals, listRows }).filter((e) => !finalIds.has(e.id));
   const wantAlt = [...bare.filter((e) => e.kind === 'tv').slice(0, 2000), ...bare.filter((e) => e.kind === 'movie').slice(0, 1000)].map((e) => e.id);
   for (const [id, alts] of await fetchAltNames(tmdb, wantAlt)) alternates.set(id, alts);
-  const titleEntries = trimIndexToBytes(buildIndexFor(chosen, tasteRefs, originals, listRows, alternates), protectedIds, builtAt);
-  log(`titles.json aka: ${titleEntries.filter((t) => t.aka?.length).length} of ${titleEntries.length} entries have alternate names`);
+  const titleEntries = trimIndexToBytes(buildTitleIndex({ items: finalItems, originals, listRows, alternates }), finalIds, builtAt);
   const titleIndex: TitleIndex = { schema: 1, builtAt, titles: titleEntries };
   const titlesJson = JSON.stringify(titleIndex);
   const titlesBytes = Buffer.byteLength(titlesJson);
 
   // Validate BEFORE writing anything
-  const problems = [...validateCatalog(catalog, bytes, prevCatalog?.items.length ?? null), ...validateTitleIndex(titleIndex, titlesBytes, [...protectedIds])];
-  printSummary(catalog, diff, bytes, started, tmdb);
-  log(`titles.json: ${titleEntries.length} entries (${titleEntries.filter((t) => t.kind === 'tv').length} tv), ${titlesBytes} bytes (${(titlesBytes / 1_048_576).toFixed(2)} MB)`);
-  log(`latestSeason set on ${catalog.items.filter((i) => i.latestSeason).length} of ${catalog.items.filter((i) => i.kind === 'tv').length} TV items; spinoffOf on ${catalog.items.filter((i) => i.spinoffOf).length}`);
-  for (const probe of ['Breaking Bad', 'The Office', 'The Bear', 'Abbott Elementary']) {
-    for (const t of titleEntries.filter((x) => x.title === probe)) log(`  probe ${probe}: ${t.id} ${t.year} pop ${t.popularity}${catalog.items.find((i) => i.id === t.id) ? ' [in catalog] latestSeason=' + JSON.stringify(catalog.items.find((i) => i.id === t.id)!.latestSeason ?? null) : ''}`);
-  }
+  const problems = [...validateBuild(manifest, files, previous.prev), ...validateTitleIndex(titleIndex, titlesBytes, [...finalIds])];
+  printSummary(files, manifest, finalItems, diff, titleEntries.length, titlesBytes, started, tmdb);
   if (problems.length) {
     console.error('\nCATALOG BUILD FAILED SANITY CHECKS:\n - ' + problems.join('\n - '));
     process.exit(1);
   }
 
-  await mkdir(OUT_DIR, { recursive: true });
-  await writeFile(path.join(OUT_DIR, 'catalog.json'), json);
+  await rm(path.join(OUT_DIR, 'catalog'), { recursive: true, force: true });
+  await rm(path.join(OUT_DIR, 'catalog.json'), { force: true });
+  await mkdir(path.join(OUT_DIR, 'catalog'), { recursive: true });
+  for (const [id, f] of files) await writeFile(path.join(OUT_DIR, 'catalog', `${id}.json`), f.json);
+  await writeFile(path.join(OUT_DIR, 'manifest.json'), JSON.stringify(manifest));
   await writeFile(path.join(OUT_DIR, 'new.json'), JSON.stringify(diff.arrivals));
   await writeFile(path.join(OUT_DIR, 'pool.json'), JSON.stringify(pool));
   await writeFile(path.join(OUT_DIR, 'titles.json'), titlesJson);
-  log('\nWrote public/data/catalog.json, new.json, pool.json, titles.json');
+  log(`\nWrote public/data/manifest.json, catalog/*.json (${files.size} files), new.json, pool.json, titles.json`);
 }
 
-function printSummary(c: Catalog, diff: ReturnType<typeof diffArrivals>, bytes: number, started: number, tmdb: TmdbClient) {
+function printSummary(
+  files: Map<ServiceId, BuiltService>,
+  manifest: CatalogManifest,
+  items: CatalogItem[],
+  diff: ReturnType<typeof diffArrivals>,
+  titleCount: number,
+  titlesBytes: number,
+  started: number,
+  tmdb: TmdbClient,
+) {
+  const mb = (n: number) => (n / 1_048_576).toFixed(2);
   const count = <T,>(xs: T[], f: (x: T) => string) => {
     const m: Record<string, number> = {};
     for (const x of xs) m[f(x)] = (m[f(x)] ?? 0) + 1;
-    return m;
+    return Object.entries(m).map(([k, v]) => `${k}=${v}`).join('  ');
   };
-  const fmt = (m: Record<string, number>) => Object.entries(m).map(([k, v]) => `${k}=${v}`).join('  ');
   log('\n================ CATALOG SUMMARY ================');
-  log(`Titles: ${c.items.length}   tasteRefs: ${c.tasteRefs.length}   size: ${bytes} bytes (${(bytes / 1_048_576).toFixed(2)} MB)`);
-  log('Per service (default plan):  ' + fmt(countByDefaultService(c)));
-  const anyPlan: Record<string, number> = {};
-  for (const s of SERVICES) anyPlan[s.id] = c.items.filter((i) => servicesOf(i.providers, SERVICE_PROVIDERS).includes(s.id as ServiceId)).length;
-  log('Per service (any plan):      ' + fmt(anyPlan));
-  const perProvider: Record<string, number> = {};
-  for (const p of ALL_PROVIDER_IDS) perProvider[String(p)] = c.items.filter((i) => i.providers.includes(p)).length;
-  log('Per provider id:             ' + fmt(perProvider));
-  log('Per kind:                    ' + fmt(count(c.items, (i) => i.kind)));
-  log('Attention:                   ' + fmt(count(c.items, (i) => i.attention)));
-  log(
-    `Flags: horror=${c.items.filter((i) => i.flags.horror).length} trueCrime=${c.items.filter((i) => i.flags.trueCrime).length} scary=${c.items.filter((i) => i.flags.scary).length}`,
-  );
-  const tv = c.items.filter((i) => i.kind === 'tv');
-  log(`TV: ${tv.length}  dropIn=${tv.filter((i) => i.dropIn).length}  with standout episodes=${tv.filter((i) => i.standout.length).length}`);
-  log(`Seed favourites resolved: HG ${c.seedFavorites.HG.length}/14, BG ${c.seedFavorites.BG.length}/22; in catalog: ${[...new Set([...c.seedFavorites.HG, ...c.seedFavorites.BG])].filter((id) => c.items.some((i) => i.id === id)).length}`);
-  log(
-    `New arrivals: ${diff.arrivals.entries.length} entries in window (+${diff.addedTitles} titles, +${diff.addedSeasons} seasons this build)${diff.seeded ? ' [first build: seeded from release dates]' : ''}${diff.suspicious ? ' [WARNING: unusually many new titles; title arrivals ignored]' : ''}`,
-  );
-  log(`Time: ${Math.round((Date.now() - started) / 1000)}s   requests: ${tmdb.stats.requests}   retries: ${tmdb.stats.retries}   limits: min ${LIMITS.minTitles} titles, ${LIMITS.minPerDefaultService}/service`);
-  log('Default-plan providers: ' + Object.entries(DEFAULT_PROVIDERS).map(([k, v]) => `${k}:[${[...v]}]`).join(' '));
+  log(`Distinct titles: ${distinctTitles(files.values())}   services published: ${files.size}`);
+  let totalBytes = 0;
+  for (const s of SERVICES_IN_USE) {
+    const f = files.get(s.id);
+    if (!f) continue;
+    totalBytes += f.bytes;
+    const plans = s.plans.map((p) => `${p.id}=${f.catalog.items.filter((i) => onPlan(i.providers, p)).length}`).join(' ');
+    log(`  ${s.id.padEnd(13)} ${String(f.catalog.items.length).padStart(5)} titles  ${String(f.bytes).padStart(8)} B (${mb(f.bytes)} MB)   plans: ${plans}`);
+  }
+  log(`All service files together: ${mb(totalBytes)} MB raw (limit per file ${LIMITS.maxFileBytes} B)`);
+  log(`Per kind:   ${count(items, (i) => i.kind)}`);
+  log(`Attention:  ${count(items, (i) => i.attention)}`);
+  log(`Language:   ${count(items, (i) => i.lang).split('  ').slice(0, 8).join('  ')} ...`);
+  log(`Flags: horror=${items.filter((i) => i.flags.horror).length} trueCrime=${items.filter((i) => i.flags.trueCrime).length} scary=${items.filter((i) => i.flags.scary).length}`);
+  const tv = items.filter((i) => i.kind === 'tv');
+  log(`TV: ${tv.length}  dropIn=${tv.filter((i) => i.dropIn).length}  with standout episodes=${tv.filter((i) => i.standout.length).length}  latestSeason set=${tv.filter((i) => i.latestSeason).length}  spinoffOf=${items.filter((i) => i.spinoffOf).length}`);
+  log(`titles.json: ${titleCount} entries, ${titlesBytes} bytes (${mb(titlesBytes)} MB)`);
+  log(`New arrivals: ${diff.arrivals.entries.length} entries in window (+${diff.addedTitles} titles, +${diff.addedSeasons} seasons this build)${diff.fromDates ? ' [first build: from release dates]' : ''}${diff.suspicious ? ' [WARNING: unusually many new titles; title arrivals ignored]' : ''}`);
+  log(`Time: ${Math.round((Date.now() - started) / 1000)}s   requests: ${tmdb.stats.requests}   retries: ${tmdb.stats.retries}`);
   log('=================================================');
-  void sleep;
+  void manifest;
 }
 
 main().catch((e) => {

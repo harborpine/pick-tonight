@@ -1,6 +1,6 @@
 /** Turns a raw TMDB detail response into a normalised, tagged title. Pure; no network. */
 import type { CatalogItem, GenreId, TitleCore, TitleKind } from '../../src/contracts/catalog';
-import { ALL_PROVIDER_IDS } from '../../src/contracts/catalog';
+import { ALL_IDS } from './services';
 import { mapGenres, pickRuntime, tagTitle, countKw, type TagInput } from './tagging';
 import { truncate, round2 } from './util';
 
@@ -27,7 +27,7 @@ export interface Parsed {
   rating: number;
   votes: number;
   popularity: number;
-  /** Subscription (flatrate + ads) US providers, restricted to ALL_PROVIDER_IDS. */
+  /** Subscription (flatrate + ads) US providers, restricted to the provider ids of the services table. */
   providers: number[];
   related: string[];
   adult: boolean;
@@ -41,7 +41,7 @@ export interface Parsed {
   altTitles: { country: string; title: string; type: string }[];
 }
 
-const ALL = new Set(ALL_PROVIDER_IDS);
+const ALL = new Set(ALL_IDS);
 
 export function usProviders(d: any): number[] {
   const us = d?.['watch/providers']?.results?.US;
@@ -188,6 +188,7 @@ export function toCatalogItem(p: Parsed, today?: string): CatalogItem {
     ...(p.kind === 'tv' ? { seasons: p.seasons } : {}),
     ...(p.kind === 'tv' && today && pickLatestSeason(p.seasonPremieres, today) ? { latestSeason: pickLatestSeason(p.seasonPremieres, today) } : {}),
     ...(p.certification ? { certification: p.certification } : {}),
+    lang: p.originalLanguage || 'en',
     rating: p.rating,
     votes: p.votes,
     popularity: p.popularity,
