@@ -40,23 +40,23 @@ export const MIN_SERVICE_TITLES = 40;
 
 /** How many titles at most each service's file holds (catalog size drives download size). */
 const QUOTA: Record<ServiceId, number> = {
-  netflix: 1500,
-  prime: 1500,
-  hulu: 1400,
-  tubi: 1200,
-  hbo: 1100,
-  disney: 1000,
-  paramount: 1000,
-  peacock: 1000,
-  roku: 900,
-  pluto: 800,
+  netflix: 1100,
+  prime: 1100,
+  hulu: 900,
+  tubi: 800,
+  hbo: 800,
+  disney: 800,
+  paramount: 700,
+  peacock: 700,
+  roku: 600,
+  pluto: 600,
 };
 export const DEFAULT_QUOTA = 600;
 export const quotaFor = (id: ServiceId): number => QUOTA[id] ?? DEFAULT_QUOTA;
 
 /** Services with big back catalogs get deeper discovery so the quota can be filled with good titles. */
 export function isBigService(id: ServiceId): boolean {
-  return quotaFor(id) >= 1000;
+  return quotaFor(id) >= 700;
 }
 
 /** Add-on stores inside other stores. Their titles are never part of a service's own plans. */
